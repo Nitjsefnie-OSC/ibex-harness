@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rick1330/ibex-harness/packages/canonicaljson"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
@@ -500,20 +501,22 @@ func enqueueOutbox(ctx context.Context, tx *sql.Tx, w outboxWrite) (uuid.UUID, e
 	}
 	eventID := uuid.New()
 	rowID := uuid.New()
-	// Digest PostgreSQL's JSONB canonical text, not Go's json.Marshal bytes.
-	// JSONB reorders keys and normalizes spacing; hashing the pre-cast input
-	// makes validateOutboxPayload reject every claimed row after SELECT.
+	// Evidence digests use RFC 8785 JCS (jcs/v1). The payload remains
+	// PostgreSQL jsonb for storage/query semantics; relay validation applies
+	// the same JCS transform after reading it back.
+	_, digest, err := canonicaljson.Digest(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("evidenceoutbox: canonicalize payload: %w", err)
+	}
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO ibex_core.evidence_outbox (
 	id, org_id, event_id, aggregate_id, aggregate_seq, schema_version,
-	event_type, payload, payload_digest, delivery_status, attempts, available_at
+	event_type, payload, payload_digest, payload_digest_scheme, delivery_status, attempts, available_at
 ) VALUES (
 	$1, $2, $3, $4, $5, $6,
-	$7, $8::jsonb,
-	encode(sha256(convert_to(($8::jsonb)::text, 'UTF8')), 'hex'),
-	$9, 0, NOW()
+	$7, $8::jsonb, $9, $10, $11, 0, NOW()
 )`, rowID, w.OrgID, eventID, w.AggregateID, w.Seq, SchemaVersion,
-		w.EventType, raw, StatusPending)
+		w.EventType, raw, digest, PayloadDigestSchemeJCSV1, StatusPending)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("evidenceoutbox: enqueue %s: %w", w.EventType, err)
 	}
