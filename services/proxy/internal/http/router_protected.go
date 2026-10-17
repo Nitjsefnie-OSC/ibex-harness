@@ -11,6 +11,7 @@ import (
 	"github.com/Rick1330/ibex-harness/packages/logger"
 	"github.com/Rick1330/ibex-harness/packages/metrics"
 	"github.com/Rick1330/ibex-harness/packages/modelpolicy"
+	"github.com/Rick1330/ibex-harness/packages/policysnapshot"
 	"github.com/Rick1330/ibex-harness/packages/provider"
 	"github.com/Rick1330/ibex-harness/packages/providercap"
 	"github.com/Rick1330/ibex-harness/packages/ratelimit"
@@ -31,6 +32,8 @@ type protectedRouteDeps struct {
 	reg                      *metrics.ProxyRegistry
 	validator                TokenValidator
 	agentVerifier            AgentVerifier
+	policyFetcher            PolicySnapshotFetcher
+	policyVerifier           *policysnapshot.Verifier
 	limiter                  ratelimit.Limiter
 	budgetCache              *billing.Cache
 	usageFactWriter          *billing.UsageFactWriter
@@ -60,15 +63,25 @@ type protectedRouteDeps struct {
 
 type routeMiddleware = func(http.Handler) http.Handler
 
-func registerProtectedRoutes(deps protectedRouteDeps) {
-	rateLimit, agentVerify, budget := protectedAuthWrappers(deps)
-	registerAuthProbeRoutes(deps, rateLimit, agentVerify)
-	registerChatCompletionsRoute(deps, rateLimit, agentVerify, budget)
-	registerResponsesRoute(deps, rateLimit, agentVerify, budget)
-	registerSessionTerminateRoute(deps, rateLimit, agentVerify)
+// routeMiddlewares bundles the protected-route middleware stages so route
+// registration stays under the function-argument budget.
+type routeMiddlewares struct {
+	rateLimit      routeMiddleware
+	agentVerify    routeMiddleware
+	policyMutation routeMiddleware
+	policyRead     routeMiddleware
+	budget         routeMiddleware
 }
 
-func registerSessionTerminateRoute(deps protectedRouteDeps, rateLimit, agentVerify routeMiddleware) {
+func registerProtectedRoutes(deps protectedRouteDeps) {
+	mw := protectedAuthWrappers(deps)
+	registerAuthProbeRoutes(deps, mw)
+	registerChatCompletionsRoute(deps, mw)
+	registerResponsesRoute(deps, mw)
+	registerSessionTerminateRoute(deps, mw)
+}
+
+func registerSessionTerminateRoute(deps protectedRouteDeps, mw routeMiddlewares) {
 	termChain := chain(
 		BodySizeLimitMiddleware(deps.cfg.MaxRequestBodyBytes, deps.docsBase),
 		ContentTypeMiddleware(deps.docsBase),
@@ -76,8 +89,9 @@ func registerSessionTerminateRoute(deps protectedRouteDeps, rateLimit, agentVeri
 			RequireSessionTerminate: true,
 			Metrics:                 deps.reg,
 		}),
-		agentVerify,
-		rateLimit,
+		mw.agentVerify,
+		mw.policyMutation,
+		mw.rateLimit,
 	)
 	h := sessionTerminateHandler{
 		store: deps.sessionStore, buffer: deps.turnBuffer, enqueue: deps.extractionEnqueue,
@@ -86,49 +100,63 @@ func registerSessionTerminateRoute(deps protectedRouteDeps, rateLimit, agentVeri
 	deps.mux.Handle("/v1/sessions/{session_id}/terminate", termChain(h))
 }
 
-func protectedAuthWrappers(deps protectedRouteDeps) (rateLimit, agentVerify, budget routeMiddleware) {
+func protectedAuthWrappers(deps protectedRouteDeps) routeMiddlewares {
+	var mw routeMiddlewares
 	if deps.limiter != nil {
-		rateLimit = RateLimitMiddleware(deps.limiter, deps.logger, deps.reg)
+		mw.rateLimit = RateLimitMiddleware(deps.limiter, deps.logger, deps.reg)
 	}
 	if deps.budgetCache != nil {
-		budget = BudgetMiddleware(deps.budgetCache, deps.logger, deps.reg)
+		mw.budget = BudgetMiddleware(deps.budgetCache, deps.logger, deps.reg)
 	}
 	if deps.agentVerifier != nil {
-		agentVerify = AgentVerificationMiddleware(deps.agentVerifier, deps.logger)
+		mw.agentVerify = AgentVerificationMiddleware(deps.agentVerifier, deps.logger)
 	}
-	return rateLimit, agentVerify, budget
+	if deps.policyFetcher != nil && deps.policyVerifier != nil {
+		mw.policyMutation = PolicySnapshotMiddleware(policySnapshotConfig{
+			fetcher: deps.policyFetcher, verifier: deps.policyVerifier,
+			class: policysnapshot.ClassMutation, metrics: deps.reg, logger: deps.logger,
+		})
+		mw.policyRead = PolicySnapshotMiddleware(policySnapshotConfig{
+			fetcher: deps.policyFetcher, verifier: deps.policyVerifier,
+			class: policysnapshot.ClassRead, metrics: deps.reg, logger: deps.logger,
+		})
+	}
+	return mw
 }
 
-func registerAuthProbeRoutes(deps protectedRouteDeps, rateLimit, agentVerify routeMiddleware) {
+func registerAuthProbeRoutes(deps protectedRouteDeps, mw routeMiddlewares) {
 	authNone := AuthMiddleware(deps.validator, deps.logger, AuthOptions{Metrics: deps.reg})
-	deps.mux.Handle("/v1/internal/auth-probe", chain(authNone, agentVerify, rateLimit)(http.HandlerFunc(handleAuthProbe)))
+	deps.mux.Handle("/v1/internal/auth-probe", chain(authNone, mw.agentVerify, mw.policyRead, mw.rateLimit)(http.HandlerFunc(handleAuthProbe)))
 
-	authOrg := func(orgID string) routeMiddleware {
-		return AuthMiddleware(deps.validator, deps.logger, AuthOptions{PathOrgID: orgID, Metrics: deps.reg})
-	}
-	deps.mux.HandleFunc("/v1/orgs/{org_id}/auth-probe", orgAuthProbeHandler(deps, authOrg, rateLimit, agentVerify))
+	orgProbe := orgAuthProbeChain{deps: deps, mw: mw}
+	deps.mux.HandleFunc("/v1/orgs/{org_id}/auth-probe", orgProbe.handler())
 }
 
-func orgAuthProbeHandler(
-	deps protectedRouteDeps,
-	authOrg func(string) routeMiddleware,
-	rateLimit, agentVerify routeMiddleware,
-) http.HandlerFunc {
+// orgAuthProbeChain bundles the shared middlewares for org-scoped auth probes.
+type orgAuthProbeChain struct {
+	deps protectedRouteDeps
+	mw   routeMiddlewares
+}
+
+func (chainDeps orgAuthProbeChain) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireMethod(w, r, http.MethodGet, deps.docsBase) {
+		if !requireMethod(w, r, http.MethodGet, chainDeps.deps.docsBase) {
 			return
 		}
 		orgID := strings.TrimSpace(r.PathValue("org_id"))
+		authOrg := AuthMiddleware(chainDeps.deps.validator, chainDeps.deps.logger,
+			AuthOptions{PathOrgID: orgID, Metrics: chainDeps.deps.reg})
 		chain(
-			PathOrgUUIDMiddleware(deps.docsBase),
-			authOrg(orgID),
-			agentVerify,
-			rateLimit,
+			PathOrgUUIDMiddleware(chainDeps.deps.docsBase),
+			authOrg,
+			chainDeps.mw.agentVerify,
+			chainDeps.mw.policyRead,
+			chainDeps.mw.rateLimit,
 		)(http.HandlerFunc(handleAuthProbe)).ServeHTTP(w, r)
 	}
 }
 
-func registerChatCompletionsRoute(deps protectedRouteDeps, rateLimit, agentVerify, budget routeMiddleware) {
+func registerChatCompletionsRoute(deps protectedRouteDeps, mw routeMiddlewares) {
 	chatChain := chain(
 		BodySizeLimitMiddleware(deps.cfg.MaxRequestBodyBytes, deps.docsBase),
 		ContentTypeMiddleware(deps.docsBase),
@@ -136,9 +164,10 @@ func registerChatCompletionsRoute(deps protectedRouteDeps, rateLimit, agentVerif
 			RequireProxyChatCompletion: true,
 			Metrics:                    deps.reg,
 		}),
-		agentVerify,
-		rateLimit,
-		budget,
+		mw.agentVerify,
+		mw.policyMutation,
+		mw.rateLimit,
+		mw.budget,
 		DirectiveResolveMiddleware(deps.directiveResolver, deps.logger),
 		ChatParseMiddleware(chatParseOpts{docsBase: deps.docsBase}),
 		ProviderRoutingMiddleware(providerRoutingOpts{
@@ -153,13 +182,13 @@ func registerChatCompletionsRoute(deps protectedRouteDeps, rateLimit, agentVerif
 	})))
 }
 
-func registerResponsesRoute(deps protectedRouteDeps, rateLimit, agentVerify, budget routeMiddleware) {
+func registerResponsesRoute(deps protectedRouteDeps, mw routeMiddlewares) {
 	manifest := deps.capabilityManifest
 	responsesChain := chain(
 		BodySizeLimitMiddleware(deps.cfg.MaxRequestBodyBytes, deps.docsBase),
 		ContentTypeMiddleware(deps.docsBase),
 		AuthMiddleware(deps.validator, deps.logger, AuthOptions{RequireProxyChatCompletion: true, Metrics: deps.reg}),
-		agentVerify, rateLimit, budget,
+		mw.agentVerify, mw.policyMutation, mw.rateLimit, mw.budget,
 		ResponsesParseMiddleware(deps.docsBase),
 		ProviderRoutingMiddleware(providerRoutingOpts{resolver: deps.modelRouter, agentDefaults: deps.agentDefaults, log: deps.logger, docsBase: deps.docsBase}),
 		ResponsesCapabilityMiddleware(manifest, deps.docsBase),
