@@ -38,6 +38,11 @@ type TombstoneFencedDeliverer interface {
 // applying it to the projection.
 var ErrTombstonedResource = errors.New("evidenceoutbox: resource is tombstoned or stale")
 
+// ErrUnsupportedFenceResource reports a tombstone fence whose resource type has
+// no authoritative lifecycle checker in this deployment; Relay records the row
+// as poison without retrying because replay can never make the fence checkable.
+var ErrUnsupportedFenceResource = errors.New("evidenceoutbox: unsupported fence resource type")
+
 var (
 	errRedactionUnclassified   = errors.New("evidenceoutbox: payload redaction class is unclassified")
 	errRedactionProhibited     = errors.New("evidenceoutbox: payload redaction class is prohibited")
@@ -252,15 +257,27 @@ func validateTombstoneFence(fence *TombstoneFence) error {
 	return nil
 }
 
+// permanentDeliveryFailures are delivery errors that replay can never resolve;
+// a row failing with any of these is dead-lettered immediately.
+var permanentDeliveryFailures = []error{
+	errRedactionUnclassified,
+	errRedactionNotProjectable,
+	errRedactionProhibited,
+	errRedactionUnsupported,
+	errTombstoneFenceMissing,
+	errTombstoneFenceInvalid,
+	errFencedDeliveryRequired,
+	ErrUnsupportedFenceResource,
+	ErrTombstonedResource,
+}
+
 func isPermanentDeliveryFailure(err error) bool {
-	return errors.Is(err, errRedactionUnclassified) ||
-		errors.Is(err, errRedactionNotProjectable) ||
-		errors.Is(err, errRedactionProhibited) ||
-		errors.Is(err, errRedactionUnsupported) ||
-		errors.Is(err, errTombstoneFenceMissing) ||
-		errors.Is(err, errTombstoneFenceInvalid) ||
-		errors.Is(err, errFencedDeliveryRequired) ||
-		errors.Is(err, ErrTombstonedResource)
+	for _, target := range permanentDeliveryFailures {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateOutboxPayload(row OutboxRow) error {
