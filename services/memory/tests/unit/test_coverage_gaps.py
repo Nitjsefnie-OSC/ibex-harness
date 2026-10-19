@@ -352,33 +352,29 @@ def test_http_error_for_write_maps_embedding() -> None:
 
 @pytest.mark.asyncio
 async def test_begin_idempotency_conflict_and_in_progress() -> None:
-    from app.idempotency.redis_store import ClaimKind, ClaimOutcome, pending_record
-    from app.routers.memory_write_support import begin_idempotency
+    from ibex_idempotency import KIND_CONFLICT, KIND_IN_PROGRESS, ClaimOutcome
 
-    store = AsyncMock()
-    store.claim = AsyncMock(
-        return_value=ClaimOutcome(kind=ClaimKind.CONFLICT, record=pending_record("fp"))
-    )
-    org_id = uuid4()
+    from app.routers.memory_write_support import Principal, begin_idempotency
+
+    ledger = AsyncMock()
+    ledger.claim = AsyncMock(return_value=ClaimOutcome(kind=KIND_CONFLICT))
+    principal = Principal(org_id=uuid4(), agent_id=uuid4())
     with pytest.raises(HTTPException) as exc:
         await begin_idempotency(
-            store=store,
-            org_id=org_id,
+            ledger=ledger,
+            principal=principal,
             idempotency_key="k",
-            fingerprint="fp",
+            request_hash="fp",
         )
     assert exc.value.status_code == 409
 
-    store.claim = AsyncMock(
-        return_value=ClaimOutcome(kind=ClaimKind.IN_PROGRESS, record=pending_record("fp"))
-    )
-    org_id = uuid4()
+    ledger.claim = AsyncMock(return_value=ClaimOutcome(kind=KIND_IN_PROGRESS, retry_after=5))
     with pytest.raises(HTTPException) as exc:
         await begin_idempotency(
-            store=store,
-            org_id=org_id,
+            ledger=ledger,
+            principal=principal,
             idempotency_key="k",
-            fingerprint="fp",
+            request_hash="fp",
         )
     assert exc.value.detail["code"] == "IDEMPOTENCY_IN_PROGRESS"
 

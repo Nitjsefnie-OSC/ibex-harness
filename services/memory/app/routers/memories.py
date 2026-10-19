@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from typing import Annotated, Any
@@ -50,6 +49,7 @@ from app.routers.memory_search_support import (
 )
 from app.routers.memory_write_support import (
     CreatedResponseContext,
+    Principal,
     begin_idempotency,
     finalize_created_response,
     finalize_quarantine_response,
@@ -73,19 +73,13 @@ from app.schemas.memories import (
 from app.schemas.search import SearchMemoriesRequest, SearchMemoriesResponse
 
 logger = logging.getLogger(__name__)
+from ibex_idempotency import IDEMPOTENCY_CONTRACT, fingerprint_request
+
 from app.write.models import WriteOutcomeKind
 
 router = APIRouter(prefix="/v1/memories", tags=["memories"])
 
-
-def _fingerprint(method: str, path: str, body: bytes) -> str:
-    digest = hashlib.sha256()
-    digest.update(method.upper().encode())
-    digest.update(b"\n")
-    digest.update(path.encode())
-    digest.update(b"\n")
-    digest.update(body)
-    return digest.hexdigest()
+CREATE_MEMORY_PATH = "/v1/memories"
 
 
 @router.post("", status_code=201, summary="Create a memory")
@@ -95,12 +89,16 @@ async def create_memory(
     ctx: Annotated[CreateMemoryContext, Depends(get_create_memory_context)],
 ) -> Any:
     start = time.perf_counter()
-    body_bytes = request.model_dump_json().encode("utf-8")
     idem = await begin_idempotency(
-        store=ctx.idempotency_store,
-        org_id=ctx.token.org_id,
+        ledger=ctx.idempotency_ledger,
+        principal=Principal(org_id=ctx.token.org_id, agent_id=request.agent_id),
         idempotency_key=ctx.idempotency_key,
-        fingerprint=_fingerprint("POST", "/v1/memories", body_bytes),
+        request_hash=fingerprint_request(
+            contract=IDEMPOTENCY_CONTRACT,
+            method="POST",
+            path=CREATE_MEMORY_PATH,
+            payload=request.model_dump(mode="json"),
+        ),
     )
     if isinstance(idem, JSONResponse):
         return idem
