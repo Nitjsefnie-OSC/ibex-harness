@@ -28,6 +28,12 @@ Methodology: [ADR-0034](/docs/adr/0034-performance-methodology) (proxy),
 Published proxy data is committed via the benchmark bot after successful **main** collects
 (`benchmark_main_complete` → artifact `benchmark-data`).
 
+Go-affecting PRs also run the blocking `benchmark-gate` job in `ci.yml`. It medians 5 samples of
+`BenchmarkProxyOverhead` and `BenchmarkProxyChatOverhead`, benchmarks a temporary `main` worktree
+on the same runner, and fails on a >20% regression or missing output. This gate is warm-path mean
+evidence, not p99; the scheduled/manual full-chat k6 profile remains the p99 evidence path. See
+[`BASELINE.md`](BASELINE.md).
+
 ### Suite contract (multi-bench)
 
 Each suite keeps its own JSON file and bot modules. Shared seams:
@@ -154,6 +160,7 @@ docker run --rm --network host -v "$PWD:/work" -w /work \
   -e K6_USE_CHAT=1 \
   -e IBEX_DEV_TOKEN=ibex_pat_00000000-0000-0000-0000-000000000004_LOCALDEVELOPMENTONLY \
   -e IBEX_DEV_AGENT_ID=00000000-0000-0000-0000-000000000003 \
+  -e K6_RUN_ID="local-$(date +%s%N)" \
   -e K6_VUS=25 -e K6_DURATION=30s \
   grafana/k6:0.53.0 run benchmarks/k6/proxy_load.js \
   --summary-trend-stats="med,p(90),p(95),p(99),p(99.9),min,max" \
