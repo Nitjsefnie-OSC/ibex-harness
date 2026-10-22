@@ -25,8 +25,9 @@ from pathlib import Path
 # Inline collections are limited to {} and single-line lists of bare tokens.
 # Every mapping/sequence value must classify as empty, closed quoted/flow,
 # a block header, or plain text with a YAML-safe first character and no colon
-# followed by whitespace/end. Plain -?: prefixes require a non-space follower;
-# multiword sequence scalars are supported, compact mappings/nested sequences
+# followed by ASCII space/tab or end. Plain -?: prefixes require a follower
+# other than ASCII space/tab; Unicode non-space characters remain scalar data.
+# Multiword sequence scalars are supported, compact mappings/nested sequences
 # outside the key grammar are rejected. Block bodies are bounded by indentation.
 # Inventory uses Go's Fuzz/non-lowercase suffix rule; names outside the ASCII
 # command grammar are explicitly unsupported, including the bare name Fuzz.
@@ -63,11 +64,11 @@ def inventory(root):
 def yaml_value(value):
     require(not value.startswith(("&", "!", "*")), "unsupported YAML scalar property")
     if value.startswith(("'", '"')):
-        require(re.fullmatch(r"'(?:[^']|'')*'\s*(?:#.*)?", value) or
-                re.fullmatch(r'"(?:[^"\\]|\\.)*"\s*(?:#.*)?', value),
+        require(re.fullmatch(r"'(?:[^']|'')*'[ \t]*(?:#.*)?", value) or
+                re.fullmatch(r'"(?:[^"\\]|\\.)*"[ \t]*(?:#.*)?', value),
                 "unsupported multiline quoted YAML scalar")
         return "quoted", value
-    value = re.split(r"(?:^|\s+)#", value, maxsplit=1)[0].rstrip()
+    value = re.split(r"(?:^|[ \t]+)#", value, maxsplit=1)[0].rstrip(" \t")
     if not value:
         return "empty", value
     if value.startswith(("[", "{")):
@@ -77,14 +78,15 @@ def yaml_value(value):
     if value.startswith(("|", ">")):
         require(re.fullmatch(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?", value), "unsupported YAML block scalar")
         return "block", value
-    plain = re.fullmatch(r"(?:[^\s\-?:,\[\]{}#&*!|>'\"%@`]|[-?:](?=\S))[^\r\n]*", value)
-    require(plain and not re.search(r":(?:\s|$)", value), "unsupported YAML key or line: unsupported plain scalar")
+    plain = re.fullmatch(r"(?:[^ \t\-?:,\[\]{}#&*!|>'\"%@`]|[-?:](?=[^ \t]))[^\r\n]*", value)
+    require(plain and not re.search(r":(?:[ \t]|$)", value), "unsupported YAML key or line: unsupported plain scalar")
     return "plain", value
 
 
 def yaml_structure(workflow):
     # Full-line comments have no YAML structure, regardless of indentation.
-    lines = [line for line in workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    # read_text normalizes CR/CRLF; Unicode separators remain scalar content.
+    lines = [line for line in workflow.split("\n") if line.strip(" \t") and not line.lstrip(" \t").startswith("#")]
     structure, index = [], 0
     while index < len(lines):
         line = lines[index]
@@ -93,15 +95,15 @@ def yaml_structure(workflow):
         if match is None:
             item = re.fullmatch(r"( *)- (.*)", line)
             require(item is not None, "unsupported YAML key or line")
-            prefix, key, value = item[1] + "- ", None, item[2].strip()
+            prefix, key, value = item[1] + "- ", None, item[2].strip(" \t")
         else:
-            prefix, key, value = match[1] + (match[2] or ""), match[3], (match[4] or "").strip()
+            prefix, key, value = match[1] + (match[2] or ""), match[3], (match[4] or "").strip(" \t")
         kind, value = yaml_value(value)
         structure.append(prefix + (key + ":" if key is not None else "") + (" " if key and value else "") + value)
         if kind == "block":
             indent = len(prefix)
             body = []
-            while index < len(lines) and len(lines[index]) - len(lines[index].lstrip()) > indent:
+            while index < len(lines) and len(lines[index]) - len(lines[index].lstrip(" ")) > indent:
                 body.append(lines[index])
                 index += 1
             if key == "run":
@@ -123,13 +125,13 @@ def job_steps(workflow):
     require(len(starts) == 1, "expected exactly one go-fuzz job")
     job = []
     for line in lines[starts[0] + 1:]:
-        if len(line) - len(line.lstrip()) <= 2:
+        if len(line) - len(line.lstrip(" ")) <= 2:
             break
         job.append(line)
     require(job.count("    steps:") == 1, "expected one go-fuzz steps list")
     steps, current = [], None
     for line in job[job.index("    steps:") + 1:]:
-        indent = len(line) - len(line.lstrip())
+        indent = len(line) - len(line.lstrip(" "))
         if indent == 4:
             break
         if line.startswith("      - "):

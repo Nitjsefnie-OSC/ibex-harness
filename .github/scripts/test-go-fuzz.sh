@@ -43,6 +43,32 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
     for value in ["?why", ":smile", "-dash"]:
         expect_status(0, "legal plain prefix: " + value, "name: " + value + "\n" + good)
         expect_status(0, "legal sequence scalar prefix: " + value, "values:\n  - " + value + "\n" + good)
+    for character in ["\u00a0", "\u2009"]:
+        for value in ["Build:" + character + "tests", "?" + character + "why", ":" + character + "smile",
+                      "-" + character + "dash", character + "? value", "Build:" + character, character + "# text"]:
+            expect_status(0, "Unicode non-space mapping scalar: " + ascii(value), "name: " + value + "\n" + good)
+            expect_status(0, "Unicode non-space sequence scalar: " + ascii(value), "values:\n  - " + value + "\n" + good)
+        expect_status(1, "Unicode non-space cannot separate a comment: " + ascii(character),
+                      "name: text" + character + "# hidden: value\n" + good, "unsupported plain scalar")
+        for quote in ["'", '"']:
+            expect_status(1, "Unicode non-space after quote: " + ascii(quote + character),
+                          "name: " + quote + "text" + quote + character + "# comment\n" + good,
+                          "unsupported multiline quoted YAML scalar")
+        expect_status(1, "Unicode non-space after block header: " + ascii(character),
+                      "name: |" + character + "\n  text\n" + good, "unsupported YAML block scalar")
+        for line in [character, character + "# comment"]:
+            expect_status(1, "Unicode non-space line is not ignorable: " + ascii(line),
+                          line + "\n" + good, "unsupported YAML key or line")
+    for character in ["\u0085", "\u2028", "\u2029"]:
+        expect_status(0, "Unicode character is not a YAML line break: " + ascii(character),
+                      "name: Build" + character + "tests\n" + good)
+    for separator in [" ", "\t"]:
+        for value in ["?" + separator + "key", ":" + separator + "value", "-" + separator + "nested",
+                      "display name:" + separator + "value"]:
+            expect_status(1, "separated indicator or compact mapping: " + ascii(value),
+                          "name: " + value + "\n" + good, "unsupported plain scalar")
+            expect_status(1, "separated sequence indicator or compact mapping: " + ascii(value),
+                          "values:\n  - " + value + "\n" + good, "unsupported plain scalar")
     expect_status(1, "mapping-key indicator rejected", "? key\n" + good, "unsupported YAML key or line")
     expect_status(1, "sequence mapping-value indicator rejected", "values:\n  - : value\n" + good, "unsupported plain scalar")
     for indicator in ["?", ":", "-"]:
@@ -190,7 +216,7 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
     expect_status(0, "both real target steps run", real_workflow)
-    for value in ["?why", ":smile"]:
+    for value in ["?why", ":smile", "Build:\u00a0tests", "Build:\u2009tests"]:
         expect_status(0, "real workflow name prefix: " + value, re.sub(r"(?m)^name:.*$", "name: " + value, real_workflow, count=1))
     job = re.search(r"(?ms)^  go-fuzz:\n(.*?)(?=^  \S|\Z)", real_workflow).group(1)
     real_runs = re.findall(r"(?m)^        run: go test -fuzz=(\w+) -fuzztime=\S+ \S+\n", job)
