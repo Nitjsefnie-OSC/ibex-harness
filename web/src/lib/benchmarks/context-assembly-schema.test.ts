@@ -78,6 +78,16 @@ describe("context-assembly schema", () => {
     }).success).toBe(false);
   });
 
+  it.each(["rps", "attempted", "succeeded", "failed"])(
+    "accepts an exactly representable integer above the safe range for %s",
+    (field) => {
+      expect(contextAssemblyBenchmarkDataSchema.safeParse({
+        ...stubResult,
+        [field]: 2 ** 53,
+      }).success).toBe(true);
+    },
+  );
+
   it.each([0, 1])("accepts inclusive bounds at error_rate %s", (errorRate) => {
     expect(contextAssemblyBenchmarkDataSchema.safeParse({
       profile: "stub",

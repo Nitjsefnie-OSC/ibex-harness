@@ -2,11 +2,11 @@ import { z } from "zod";
 
 export const contextAssemblyBenchmarkDataSchema = z.object({
   profile: z.literal("stub"),
-  rps: z.number().int().min(1),
+  rps: z.number().min(1).refine(Number.isInteger),
   duration_s: z.number().positive(),
-  attempted: z.number().int().nonnegative(),
-  succeeded: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
+  attempted: z.number().nonnegative().refine(Number.isInteger),
+  succeeded: z.number().nonnegative().refine(Number.isInteger),
+  failed: z.number().nonnegative().refine(Number.isInteger),
   error_rate: z.number().min(0).max(1),
   mean_ms: z.number().nonnegative(),
   p50_ms: z.number().nonnegative(),
