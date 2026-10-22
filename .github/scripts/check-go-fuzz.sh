@@ -13,9 +13,9 @@ from pathlib import Path
 # eight-space step fields; run: plain single-line or literal | (ten-space lines).
 # Commands are bare `go test -fuzz=Name -fuzztime=Nu ./package/` (flags in either
 # order), Name=Fuzz[A-Z0-9_][A-Za-z0-9_]*, N=positive integer, u=ns|us|ms|s|m|h,
-# <= int64 ns. Command lines use printable ASCII with ASCII spaces between words.
+# <= int64 ns. Executable text uses printable ASCII with ASCII spaces between words.
 # Only absent/true/false step conditions; false supplies no coverage. Trailing
-# whitespace-separated # comments are allowed. Anchors, compound/fractional
+# ASCII-space-separated # comments may contain Unicode and tabs. Anchors, compound/fractional
 # durations, other flags, shell syntax and other run-step fields fail loudly.
 # Block scalar contents are not mapping keys; quoted YAML scalars must fit one line.
 # YAML keys match [A-Za-z_][A-Za-z0-9_.-]*,
@@ -32,6 +32,11 @@ from pathlib import Path
 # Inventory uses Go's Fuzz/non-lowercase suffix rule; names outside the ASCII
 # command grammar are explicitly unsupported, including the bare name Fuzz.
 # Each accepted selector must regex-match exactly one discovered name in its package.
+# Workflow and go-fuzz job defaults are unsupported: commands assume the checkout
+# root and the runner's default shell, with no inherited run overrides.
+# Job conditions may be absent, true, or exactly needs.changes.outputs.run_go == 'true'.
+# The last is a contextual assumption: coverage applies when that Go-change gate
+# opens. Other job conditions are refused, not evaluated as Actions expressions.
 
 
 def require(condition, reason):
@@ -114,6 +119,7 @@ def yaml_structure(workflow):
 
 def job_steps(workflow):
     lines = yaml_structure(workflow)
+    require(not any(line.startswith("defaults:") for line in lines), "unsupported workflow defaults")
     roots = [i for i, line in enumerate(lines) if line == "jobs:"]
     require(len(roots) == 1, "expected exactly one root jobs mapping")
     jobs = []
@@ -129,6 +135,11 @@ def job_steps(workflow):
         if len(line) - len(line.lstrip(" ")) <= 2:
             break
         job.append(line)
+    require(not any(line.startswith("    defaults:") for line in job), "unsupported go-fuzz defaults")
+    conditions = [line.partition(":")[2].strip(" \t") for line in job if line.startswith("    if:")]
+    require(len(conditions) <= 1, "duplicate go-fuzz job condition")
+    require(not conditions or conditions[0] in {"true", "needs.changes.outputs.run_go == 'true'"},
+            "unsupported or disabled go-fuzz job condition")
     require(job.count("    steps:") == 1, "expected one go-fuzz steps list")
     steps, current = [], None
     for line in job[job.index("    steps:") + 1:]:
@@ -172,8 +183,8 @@ def commands(step):
 
 
 def target_for(command):
-    require(all(" " <= character <= "~" for character in command), "unsupported command character: expected printable ASCII")
     command = re.split(r" +#", command, maxsplit=1)[0].strip(" ")
+    require(all(" " <= character <= "~" for character in command), "unsupported command character: expected printable ASCII")
     if not command or command.startswith("#"):
         return None
     require(not re.search(r"[^A-Za-z0-9_./=^$*+?()\[\]{}|: -]", command), "unsupported shell syntax")

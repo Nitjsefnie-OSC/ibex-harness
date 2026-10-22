@@ -19,7 +19,7 @@ good = prefix + first + second
 real_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 real_sources = [(path.relative_to(root), path.read_text(encoding="utf-8")) for path in root.rglob("*_test.go")]
 
-with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
+with tempfile.TemporaryDirectory(prefix="go-fuzz-test-") as temporary:
     fixture = Path(temporary)
     workflow = fixture / ".github/workflows/ci.yml"
     workflow.parent.mkdir(parents=True)
@@ -27,6 +27,10 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         path = fixture / "services" / package / "fuzz_test.go"
         path.parent.mkdir(parents=True)
         path.write_text(f"package {package}\nimport \"testing\"\nfunc {name}(f *testing.F) {{}}\n", encoding="utf-8")
+
+    result = subprocess.run(["bash", str(guard), str(root)], text=True, capture_output=True)
+    assert result.returncode == 0, f"real inventory while fixture exists\n{result.stdout}{result.stderr}"
+    print("PASS: real inventory while fixture exists")
 
     def expect_status(expected, label, content=good, reason=""):
         workflow.write_text(content, encoding="utf-8")
@@ -176,6 +180,18 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
     expect_status(1, "shell expansion rejected", good.replace("30s", "$(bound)"), "unsupported -fuzztime bound")
     expect_status(0, "flags in either order", good.replace("-fuzz=FuzzAlpha -fuzztime=30s", "-fuzztime=30s -fuzz=FuzzAlpha"))
     expect_status(0, "trailing comments allowed", good.replace("./services/beta/", "./services/beta/ # a comment"))
+    for form, content in [("plain", good), ("literal", good.replace("run: go test", "run: |\n          go test"))]:
+        for character in ["é", "\t", "\u0085", "\u2028", "\u2029", "\u00a0", "\u2009"]:
+            commented = content.replace("./services/beta/", "./services/beta/ # note" + character + "text")
+            expect_status(0, form + " trailing comment allows " + ascii(character), commented)
+            expect_status(1, form + " comment cannot hide executable character " + ascii(character),
+                          commented.replace("go test", "go" + character + "test"), "unsupported command character")
+        expect_status(1, form + " attached hash is not a comment",
+                      content.replace("./services/beta/", "./services/beta/#comment"), "unsupported shell syntax")
+        for character in ["\x01", "\x1f"]:
+            expect_status(1, form + " comment retains workflow control refusal " + ascii(character),
+                          content.replace("./services/beta/", "./services/beta/ # note" + character + "text"),
+                          "unsupported YAML control character")
     expect_status(0, "literal run block", good.replace("run: go test", "run: |\n          go test"))
     expect_status(0, "comment-only literal line", good.replace("run: go test", "run: |\n          # comment\n          go test"))
     expect_status(0, "blank lines", good.replace(first, "\n" + first + "\n"))
@@ -238,6 +254,31 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
     expect_status(0, "both real target steps run", real_workflow)
+    for field, value in [("working-directory", "services/auth"), ("shell", "python")]:
+        for location in ["before", "after"]:
+            defaults = f"defaults:\n  run:\n    {field}: {value}\n"
+            changed = defaults + real_workflow if location == "before" else real_workflow + "\n" + defaults
+            expect_status(1, f"workflow defaults {field} {location} jobs", changed, "unsupported workflow defaults")
+            defaults = "\n".join("    " + line for line in defaults.split("\n") if line) + "\n"
+            changed = real_workflow.replace("  go-fuzz:\n", "  go-fuzz:\n" + defaults) if location == "before" else real_workflow.replace("\n  trivy:", "\n" + defaults + "\n  trivy:")
+            expect_status(1, f"job defaults {field} {location} steps", changed, "unsupported go-fuzz defaults")
+    expect_status(0, "sibling job defaults do not affect fuzz commands",
+                  real_workflow.replace("  trivy:\n", "  trivy:\n    defaults:\n      run:\n        shell: python\n"))
+    job = re.search(r"(?ms)^  go-fuzz:\n(.*?)(?=^  \S|\Z)", real_workflow).group(1)
+    for condition in ["false", "'false'", '"false"', "False", "FALSE", "${{ false }}", "0", "null", "''", '""',
+                      "success()", "${{ inputs.fuzz }}"]:
+        changed_job = re.sub(r"(?m)^    if:.*$", "    if: " + condition, job, count=1)
+        expect_status(1, "real disabled or unsupported job condition: " + condition,
+                      real_workflow.replace(job, changed_job, 1), "unsupported or disabled go-fuzz job condition")
+    unconditional_job = re.sub(r"(?m)^    if:.*\n", "", job, count=1)
+    expect_status(0, "explicit true job condition", real_workflow.replace(job, unconditional_job + "    if: true\n", 1))
+    expect_status(1, "disabled job condition after steps", real_workflow.replace(job, unconditional_job + "    if: false\n", 1),
+                  "unsupported or disabled go-fuzz job condition")
+    expect_status(1, "duplicate job condition", real_workflow.replace("  go-fuzz:\n", "  go-fuzz:\n    if: true\n"),
+                  "duplicate go-fuzz job condition")
+    expect_status(1, "disabled real step cannot supply coverage",
+                  real_workflow.replace("        run: go test -fuzz=FuzzSplitJWTAndHeader", "        if: false\n        run: go test -fuzz=FuzzSplitJWTAndHeader"),
+                  "FuzzSplitJWTAndHeader")
     for character in ["\u0085", "\u2028", "\u2029"]:
         expect_status(0, "real workflow Unicode name: " + ascii(character),
                       re.sub(r"(?m)^name:.*$", "name: Build" + character + "tests", real_workflow, count=1))
@@ -245,7 +286,6 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
                       real_workflow.replace("run: go test", "run: go" + character + "test"), "unsupported command character")
     for value in ["?why", ":smile", "Build:\u00a0tests", "Build:\u2009tests"]:
         expect_status(0, "real workflow name prefix: " + value, re.sub(r"(?m)^name:.*$", "name: " + value, real_workflow, count=1))
-    job = re.search(r"(?ms)^  go-fuzz:\n(.*?)(?=^  \S|\Z)", real_workflow).group(1)
     real_runs = re.findall(r"(?m)^        run: go test -fuzz=(\w+) -fuzztime=\S+ \S+\n", job)
     assert real_runs, "expected real fuzz commands for removal checks"
     for name in real_runs:
