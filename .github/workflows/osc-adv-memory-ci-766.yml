@@ -1,0 +1,58 @@
+name: OSC memory CI gate (766)
+
+# Fork-only targeted validation for the structured-PII recall CI seam.
+# Not part of upstream CI. Validates a target_ref by running the same
+# memory-test CI path the repository's ci.yml memory-test job runs.
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Git branch, tag, or 40-character commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: osc-adv-memory-ci-766-${{ inputs.target_ref }}
+  cancel-in-progress: true
+
+jobs:
+  memory-ci:
+    name: memory-test CI path at target ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Provenance
+        run: |
+          echo "osc-adv-memory-ci-766 target_ref=${{ inputs.target_ref }}"
+          echo "osc-adv-memory-ci-766 sha=$(git rev-parse HEAD)"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Shellcheck repository shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          find .github/scripts infra/scripts -name '*.sh' -print0 | xargs -0 shellcheck -S error
+
+      - name: Memory test CI path (unit tests + structured PII recall gate)
+        run: bash infra/scripts/memory-test-ci.sh
