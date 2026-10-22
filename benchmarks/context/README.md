@@ -14,6 +14,10 @@ Exit-audit criterion 4 remains **Partial**. The [index criterion](../../web/cont
 and [goals target](../../web/content/roadmap/phase-3-5-extraction-assembly/goals.mdx#L70)
 specify different load conditions. This table selects neither numeric contract.
 
+The `contextAssembly` registry entry and data contract exist. Its reserved
+`/benchmarks/context-assembly` Overview is withheld from navigation and the sitemap
+because the page route is not implemented.
+
 ## Stub profile (default)
 
 In-process server + memory stubs. Asserts **p99 < 50ms** at the configured RPS.

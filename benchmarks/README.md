@@ -57,7 +57,8 @@ contract shape only. Harnesses / metrics today:
   `data-schema/context-assembly-benchmark-data.schema.json`. The scheduled/manual
   `context-benchmark.yml` stub gate and site registry entry exist; the workflow writes
   the reserved public path and uploads the artifact. The registry has Overview
-  metadata only; no dedicated site page exists. Bot dispatch and the full live
+  metadata only; its Overview is withheld from navigation and the sitemap because
+  the route is not implemented. Bot dispatch and the full live
   pipeline remain out of scope. Go `BenchmarkProxyChatOverheadWithAssemble` is
   collected under the existing **`proxy`** suite. See the
   [profile boundaries](context/README.md#measurement-profiles-and-boundaries) and
