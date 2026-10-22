@@ -23,6 +23,11 @@ from pathlib import Path
 # scalar bodies, only mapping entries and sequence items are modeled. Anchors,
 # tags, aliases, complex/quoted keys and uncertain scalar forms fail closed.
 # Inline collections are limited to {} and single-line lists of bare tokens.
+# Every mapping/sequence value must classify as empty, closed quoted/flow,
+# a block header, or plain text with a YAML-safe first character and no colon
+# followed by whitespace/end. Plain -?: prefixes require a non-space follower;
+# multiword sequence scalars are supported, compact mappings/nested sequences
+# outside the key grammar are rejected. Block bodies are bounded by indentation.
 # Inventory uses Go's Fuzz/non-lowercase suffix rule; names outside the ASCII
 # command grammar are explicitly unsupported, including the bare name Fuzz.
 # Each accepted selector must regex-match exactly one discovered name in its package.
@@ -55,6 +60,28 @@ def inventory(root):
     return targets
 
 
+def yaml_value(value):
+    require(not value.startswith(("&", "!", "*")), "unsupported YAML scalar property")
+    if value.startswith(("'", '"')):
+        require(re.fullmatch(r"'(?:[^']|'')*'\s*(?:#.*)?", value) or
+                re.fullmatch(r'"(?:[^"\\]|\\.)*"\s*(?:#.*)?', value),
+                "unsupported multiline quoted YAML scalar")
+        return "quoted", value
+    value = re.split(r"(?:^|\s+)#", value, maxsplit=1)[0].rstrip()
+    if not value:
+        return "empty", value
+    if value.startswith(("[", "{")):
+        require(value == "{}" or re.fullmatch(r"\[(?:[A-Za-z0-9_./-]+(?:[ \t]*,[ \t]*[A-Za-z0-9_./-]+)*)?\]", value),
+                "unsupported YAML flow scalar")
+        return "flow", value
+    if value.startswith(("|", ">")):
+        require(re.fullmatch(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?", value), "unsupported YAML block scalar")
+        return "block", value
+    plain = re.fullmatch(r"(?:[^\s\-?:,\[\]{}#&*!|>'\"%@`]|[-?:](?=\S))[^\r\n]*", value)
+    require(plain and not re.search(r":(?:\s|$)", value), "unsupported YAML key or line: unsupported plain scalar")
+    return "plain", value
+
+
 def yaml_structure(workflow):
     # Full-line comments have no YAML structure, regardless of indentation.
     lines = [line for line in workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
@@ -69,20 +96,9 @@ def yaml_structure(workflow):
             prefix, key, value = item[1] + "- ", None, item[2].strip()
         else:
             prefix, key, value = match[1] + (match[2] or ""), match[3], (match[4] or "").strip()
-        require(not value.startswith(("&", "!", "*")), "unsupported YAML scalar property")
-        if value.startswith(("'", '"')):
-            require(re.fullmatch(r"'(?:[^']|'')*'\s*(?:#.*)?", value) or
-                    re.fullmatch(r'"(?:[^"\\]|\\.)*"\s*(?:#.*)?', value),
-                    "unsupported multiline quoted YAML scalar")
-        else:
-            value = re.split(r"(?:^|\s+)#", value, maxsplit=1)[0].rstrip()
-            if value.startswith(("[", "{")):
-                require(value == "{}" or re.fullmatch(r"\[(?:[A-Za-z0-9_./-]+(?:[ \t]*,[ \t]*[A-Za-z0-9_./-]+)*)?\]", value),
-                        "unsupported YAML flow scalar")
-            require(not value.startswith(("?", ":", "%", "@", "`")), "unsupported YAML key or line")
+        kind, value = yaml_value(value)
         structure.append(prefix + (key + ":" if key is not None else "") + (" " if key and value else "") + value)
-        if value.startswith(("|", ">")):
-            require(re.fullmatch(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?", value), "unsupported YAML block scalar")
+        if kind == "block":
             indent = len(prefix)
             body = []
             while index < len(lines) and len(lines[index]) - len(lines[index].lstrip()) > indent:

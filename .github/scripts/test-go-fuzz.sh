@@ -37,6 +37,20 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         print(f"PASS: {label}")
 
     expect_status(0, "both target steps run")
+    for opener in ['- display name: "', '- display name: &label "', '- display name: !!str "', '- - "']:
+        hidden_job = "jobs:\n  real:\n    steps:\n      - run: echo done\n    strategy:\n      matrix:\n        include:\n          " + opener + "\n" + good.removeprefix("jobs:\n").rstrip() + ' #"\n'
+        expect_status(1, "sequence content must be classified: " + opener, hidden_job, "unsupported plain scalar")
+    for value in ["?why", ":smile", "-dash"]:
+        expect_status(0, "legal plain prefix: " + value, "name: " + value + "\n" + good)
+        expect_status(0, "legal sequence scalar prefix: " + value, "values:\n  - " + value + "\n" + good)
+    expect_status(1, "mapping-key indicator rejected", "? key\n" + good, "unsupported YAML key or line")
+    expect_status(1, "sequence mapping-value indicator rejected", "values:\n  - : value\n" + good, "unsupported plain scalar")
+    for indicator in ["?", ":", "-"]:
+        expect_status(1, "empty plain indicator rejected: " + indicator, "name: " + indicator + "\n" + good, "unsupported plain scalar")
+    expect_status(0, "ordinary multiword sequence scalar", "values:\n  - just text\n" + good)
+    expect_status(0, "literal quotes inside plain scalar", 'name: ordinary "literal\n' + good)
+    expect_status(0, "colon without separation inside plain scalar", "name: scheme:value\n" + good)
+    expect_status(0, "run block sequence text is opaque YAML data", "jobs:\n  real:\n    steps:\n      - run: |\n          - echo done\n" + good.removeprefix("jobs:\n"))
     scalar_job = "jobs:\n  real:\n    steps:\n      - run: echo done\n    name : \"\n" + good.removeprefix("jobs:\n") + "    \"\n"
     expect_status(1, "spaced colon cannot hide a multiline scalar", scalar_job, "unsupported multiline quoted YAML scalar")
     expect_status(1, "anchor property cannot hide a multiline scalar", scalar_job.replace('name : "', 'name: &label "'), "unsupported YAML scalar property")
@@ -176,6 +190,8 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
     expect_status(0, "both real target steps run", real_workflow)
+    for value in ["?why", ":smile"]:
+        expect_status(0, "real workflow name prefix: " + value, re.sub(r"(?m)^name:.*$", "name: " + value, real_workflow, count=1))
     job = re.search(r"(?ms)^  go-fuzz:\n(.*?)(?=^  \S|\Z)", real_workflow).group(1)
     real_runs = re.findall(r"(?m)^        run: go test -fuzz=(\w+) -fuzztime=\S+ \S+\n", job)
     assert real_runs, "expected real fuzz commands for removal checks"
