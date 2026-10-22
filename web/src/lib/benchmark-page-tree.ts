@@ -4,6 +4,7 @@ import {
   BENCHMARK_HUB_PAGE,
   CROSS_SUITE_COMPARE_PAGE,
   buildBenchmarkNavPages,
+  hasPublishedBenchmarkPages,
   suiteById,
   type SuiteNavPage,
 } from "@/lib/benchmarks/suites";
@@ -87,9 +88,11 @@ export const benchmarkPageTree: PageTree.Root = {
     suiteFolder(extractionSuite.label, extractionSuite.navPages, {
       index: extractionOverview,
     }),
-    suiteFolder(contextSuite.label, contextSuite.navPages),
+    ...(hasPublishedBenchmarkPages(contextSuite)
+      ? [suiteFolder(contextSuite.label, contextSuite.navPages)]
+      : []),
   ],
 };
 
-/** Flat leaf list for sitemap / mobile drawer (hub + all suite pages). */
+/** Flat leaf list for sitemap / mobile drawer (hub + available suite pages). */
 export const BENCHMARK_NAV_PAGES: readonly SuiteNavPage[] = buildBenchmarkNavPages();

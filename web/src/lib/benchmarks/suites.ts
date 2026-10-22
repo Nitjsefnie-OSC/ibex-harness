@@ -265,11 +265,19 @@ export function suiteForPathname(pathname: string): BenchmarkSuite | null {
   return null;
 }
 
-/** Flat leaf list for sitemap / mobile drawer (hub + all suite pages). Dedupes proxy hub URL. */
+export function hasPublishedBenchmarkPages(suite: BenchmarkSuite): boolean {
+  // Context's route is not implemented; its registry entry and data contract are live.
+  return suite.id !== "contextAssembly";
+}
+
+/** Flat leaf list for sitemap / mobile drawer (hub + available suite pages). Dedupes proxy hub URL. */
 export function buildBenchmarkNavPages(): readonly SuiteNavPage[] {
   const pages: SuiteNavPage[] = [BENCHMARK_HUB_PAGE, CROSS_SUITE_COMPARE_PAGE];
   const seen = new Set<string>([BENCHMARK_HUB_PAGE.url, CROSS_SUITE_COMPARE_PAGE.url]);
   for (const suite of BENCHMARK_SUITES) {
+    if (!hasPublishedBenchmarkPages(suite)) {
+      continue;
+    }
     for (const page of suite.navPages) {
       if (seen.has(page.url)) {
         continue;
