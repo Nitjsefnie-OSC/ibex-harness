@@ -2,6 +2,18 @@
 
 Python async gRPC load script for `ContextAssemblyService.AssembleContext`.
 
+## Measurement profiles and boundaries
+
+| Profile | Measures | Boundary | Gate status |
+| --- | --- | --- | --- |
+| Stub (`--profile stub`) | `AssembleContext` RPC latency and request error rate at the configured load | In-process gRPC server and memory stubs; excludes the live memory service, corpus retrieval, and proxy HTTP path | Scheduled/manual `context-benchmark.yml` gate enforces the existing stub p99 and error-rate checks and validates the stub artifact schema |
+| Live 100K (`--profile live`) | RPC latency and request error rate against the configured context service with a seeded memory corpus | Exercises the live context and memory services; excludes the proxy HTTP path | Manual run, no CI gate; live results are outside the stub-only artifact schema |
+| Proxy overhead (`BenchmarkProxyChatOverheadWithAssemble`) | Warm chat-handler overhead with assembly enabled in [`chat_overhead_bench_test.go`](../../services/proxy/internal/http/chat_overhead_bench_test.go) | Warm auth/directive caches, Redis rate limiting, immediate mock provider, and an always-successful fake assembler; excludes real context RPCs and corpus retrieval | Collected under the `proxy` suite; no dedicated context-assembly p99 gate |
+
+Exit-audit criterion 4 remains **Partial**. The [index criterion](../../web/content/roadmap/phase-3-5-extraction-assembly/index.mdx#L101)
+and [goals target](../../web/content/roadmap/phase-3-5-extraction-assembly/goals.mdx#L70)
+specify different load conditions. This table selects neither numeric contract.
+
 ## Stub profile (default)
 
 In-process server + memory stubs. Asserts **p99 < 50ms** at the configured RPS.
