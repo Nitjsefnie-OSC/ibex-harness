@@ -23,7 +23,8 @@ export type BenchmarkSuiteId =
   | "hnsw"
   | "rankingQuality"
   | "writePipeline"
-  | "extractionQuality";
+  | "extractionQuality"
+  | "contextAssembly";
 
 export type BenchmarkGroupId = "proxy" | "memory" | "quality";
 
@@ -160,16 +161,33 @@ export const EXTRACTION_QUALITY_SUITE: BenchmarkSuite = {
   ],
 };
 
+export const CONTEXT_ASSEMBLY_SUITE: BenchmarkSuite = {
+  id: "contextAssembly",
+  label: "Context assembly",
+  basePath: "/benchmarks/context-assembly",
+  dataUrl: "/benchmarks/context-assembly-benchmark-data.json",
+  groupId: "proxy",
+  icon: Layers,
+  navPages: [
+    {
+      name: "Overview",
+      url: "/benchmarks/context-assembly",
+      icon: LayoutDashboard,
+    },
+  ],
+};
+
 export const BENCHMARK_SUITES: readonly BenchmarkSuite[] = [
   PROXY_SUITE,
   HNSW_SUITE,
   RANKING_QUALITY_SUITE,
   WRITE_PIPELINE_SUITE,
   EXTRACTION_QUALITY_SUITE,
+  CONTEXT_ASSEMBLY_SUITE,
 ];
 
 export const BENCHMARK_GROUPS: readonly BenchmarkGroup[] = [
-  { id: "proxy", label: "Proxy", icon: Gauge, suiteIds: ["proxy"] },
+  { id: "proxy", label: "Proxy", icon: Gauge, suiteIds: ["proxy", "contextAssembly"] },
   {
     id: "memory",
     label: "Memory",

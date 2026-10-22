@@ -47,6 +47,7 @@ const hnswSuite = suiteById("hnsw");
 const rankingSuite = suiteById("rankingQuality");
 const writeSuite = suiteById("writePipeline");
 const extractionSuite = suiteById("extractionQuality");
+const contextSuite = suiteById("contextAssembly");
 
 const hnswOverview = hnswSuite.navPages.find((page) => page.name === "Overview")!;
 const rankingOverview = rankingSuite.navPages.find((page) => page.name === "Overview")!;
@@ -86,6 +87,7 @@ export const benchmarkPageTree: PageTree.Root = {
     suiteFolder(extractionSuite.label, extractionSuite.navPages, {
       index: extractionOverview,
     }),
+    suiteFolder(contextSuite.label, contextSuite.navPages),
   ],
 };
 

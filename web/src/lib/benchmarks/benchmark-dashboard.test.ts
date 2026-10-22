@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { BENCHMARK_NAV_PAGES, benchmarkPageTree } from "@/lib/benchmark-page-tree";
 import {
+  BENCHMARK_GROUPS,
   BENCHMARK_SUITES,
   buildBenchmarkPageIcons,
+  suiteById,
+  suitesInGroup,
 } from "@/lib/benchmarks/suites";
 import { stagePercentileRows } from "@/lib/benchmarks/stage-metrics";
 import type { StageLatency } from "@/lib/benchmarks/types";
@@ -28,6 +31,18 @@ function collectUrls(node: {
 }
 
 describe("benchmark navigation", () => {
+  it("resolves context assembly at its reserved data path and includes it in its group", () => {
+    const suite = suiteById("contextAssembly");
+    expect(suite.dataUrl).toBe("/benchmarks/context-assembly-benchmark-data.json");
+    expect(suite.basePath).toBe("/benchmarks/context-assembly");
+    expect(BENCHMARK_SUITES).toContain(suite);
+    expect(BENCHMARK_GROUPS.find((group) => group.id === suite.groupId)?.suiteIds)
+      .toContain("contextAssembly");
+    expect(suitesInGroup(suite.groupId)).toContain(suite);
+    expect(suite.navPages.map((page) => ({ name: page.name, url: page.url })))
+      .toEqual([{ name: "Overview", url: "/benchmarks/context-assembly" }]);
+  });
+
   it("exposes hub plus every registered suite destination", () => {
     const urls = BENCHMARK_NAV_PAGES.map((page) => page.url);
     expect(urls).toContain("/benchmarks");
@@ -48,8 +63,9 @@ describe("benchmark navigation", () => {
     expect(urls).toContain("/benchmarks/extraction-quality/history");
     expect(urls).toContain("/benchmarks/extraction-quality/compare");
     expect(urls).toContain("/benchmarks/suites-compare");
-    // hub Overview + suites compare + 5 proxy leaves + 4 hnsw + 3 ranking + 3 write + 3 extraction = 20
-    expect(BENCHMARK_NAV_PAGES).toHaveLength(20);
+    expect(urls).toContain("/benchmarks/context-assembly");
+    // hub Overview + suites compare + 5 proxy + 4 hnsw + 3 ranking + 3 write + 3 extraction + 1 context
+    expect(BENCHMARK_NAV_PAGES).toHaveLength(21);
   });
 
   it("derives icons for every nav page url including ranking/write/extraction", () => {
@@ -92,6 +108,7 @@ describe("benchmark navigation", () => {
       "Proxy",
       "Memory",
       "Extraction quality",
+      "Context assembly",
     ]);
 
     const memory = benchmarkPageTree.children.find((node) => node.name === "Memory");
