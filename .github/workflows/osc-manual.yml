@@ -1,0 +1,72 @@
+name: Manual CI
+
+# Fork-only dispatch wrapper (Nitjsefnie-OSC): validates an arbitrary ref with
+# the repository's own checks. Not part of upstream CI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Git ref to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: osc-manual-${{ inputs.target_ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: osc-validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Provenance
+        run: |
+          echo "osc-manual target_ref=${{ inputs.target_ref }}"
+          echo "osc-manual sha=$(git rev-parse HEAD)"
+
+      - name: Repo guards
+        run: |
+          bash .github/scripts/check-repo-layout.sh
+          bash .github/scripts/test-ci-gate.sh
+
+      - name: markdownlint
+        run: |
+          npm ci --prefix .github/markdownlint --ignore-scripts
+          .github/markdownlint/node_modules/.bin/markdownlint-cli2
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Benchmark pipeline unit tests
+        run: python benchmarks/scripts/test_pipeline.py
+
+      - name: Set up pnpm web
+        uses: ./.github/actions/setup-pnpm-web
+
+      - name: Web typecheck
+        run: pnpm --filter web typecheck
+
+      - name: Web tests
+        run: pnpm --filter web test
