@@ -62,6 +62,28 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
     for character in ["\u0085", "\u2028", "\u2029"]:
         expect_status(0, "Unicode character is not a YAML line break: " + ascii(character),
                       "name: Build" + character + "tests\n" + good)
+    for character in ["\u0085", "\u2028", "\u2029", "\u00a0", "\u2009", "é", "\t", "\x7f"]:
+        for form, content in [("plain", good), ("literal", good.replace("run: go test", "run: |\n          go test"))]:
+            expect_status(1, form + " command rejects non-ASCII-space separator: " + ascii(character),
+                          content.replace("go test", "go" + character + "test"), "unsupported command character")
+            if character != "\t":
+                for position, changed in [("leading", content.replace("go test", character + "go test")),
+                                          ("trailing", content.replace("./services/alpha/", "./services/alpha/" + character)),
+                                          ("comment boundary", content.replace("./services/alpha/", "./services/alpha/" + character + "# comment"))]:
+                    expect_status(1, form + " command preserves " + position + " character: " + ascii(character),
+                                  changed, "unsupported command character")
+    for codepoint in range(32):
+        if codepoint in (9, 10, 13):
+            continue  # Tabs/LF are legal; read_text normalizes CR/CRLF to LF.
+        for form, scalar in [("plain", "name: x{}y\n"), ("quoted", 'name: "x{}y"\n'),
+                             ("sequence", "values:\n  - x{}y\n"), ("literal", "name: |\n  x{}y\n")]:
+            expect_status(1, form + f" scalar rejects raw control U+{codepoint:04X}",
+                          scalar.format(chr(codepoint)) + good, "unsupported YAML control character")
+    expect_status(0, "tab remains legal scalar data", "name: x\ty\n" + good)
+    expect_status(0, "literal LF remains legal scalar data", "name: |\n  x\n  y\n" + good)
+    for ending in ["\r", "\r\n"]:
+        expect_status(0, "normalized YAML line ending: " + ascii(ending), good.replace("\n", ending))
+    expect_status(0, "repeated ASCII command spaces", good.replace("go test", "go   test"))
     for separator in [" ", "\t"]:
         for value in ["?" + separator + "key", ":" + separator + "value", "-" + separator + "nested",
                       "display name:" + separator + "value"]:
@@ -216,6 +238,11 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
     expect_status(0, "both real target steps run", real_workflow)
+    for character in ["\u0085", "\u2028", "\u2029"]:
+        expect_status(0, "real workflow Unicode name: " + ascii(character),
+                      re.sub(r"(?m)^name:.*$", "name: Build" + character + "tests", real_workflow, count=1))
+        expect_status(1, "real workflow Unicode command separator: " + ascii(character),
+                      real_workflow.replace("run: go test", "run: go" + character + "test"), "unsupported command character")
     for value in ["?why", ":smile", "Build:\u00a0tests", "Build:\u2009tests"]:
         expect_status(0, "real workflow name prefix: " + value, re.sub(r"(?m)^name:.*$", "name: " + value, real_workflow, count=1))
     job = re.search(r"(?ms)^  go-fuzz:\n(.*?)(?=^  \S|\Z)", real_workflow).group(1)

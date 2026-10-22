@@ -13,7 +13,7 @@ from pathlib import Path
 # eight-space step fields; run: plain single-line or literal | (ten-space lines).
 # Commands are bare `go test -fuzz=Name -fuzztime=Nu ./package/` (flags in either
 # order), Name=Fuzz[A-Z0-9_][A-Za-z0-9_]*, N=positive integer, u=ns|us|ms|s|m|h,
-# <= int64 ns.
+# <= int64 ns. Command lines use printable ASCII with ASCII spaces between words.
 # Only absent/true/false step conditions; false supplies no coverage. Trailing
 # whitespace-separated # comments are allowed. Anchors, compound/fractional
 # durations, other flags, shell syntax and other run-step fields fail loudly.
@@ -86,6 +86,7 @@ def yaml_value(value):
 def yaml_structure(workflow):
     # Full-line comments have no YAML structure, regardless of indentation.
     # read_text normalizes CR/CRLF; Unicode separators remain scalar content.
+    require(not re.search(r"[\x00-\x08\x0b-\x1f]", workflow), "unsupported YAML control character")
     lines = [line for line in workflow.split("\n") if line.strip(" \t") and not line.lstrip(" \t").startswith("#")]
     structure, index = [], 0
     while index < len(lines):
@@ -153,12 +154,12 @@ def commands(step):
             require(fields.get("run") == "|", "unsupported run indentation")
             body.append(line[2:])
             continue
-        match = re.fullmatch(r"([a-z-]+):\s*(.*)", line)
+        match = re.fullmatch(r"([a-z-]+):[ \t]*(.*)", line)
         require(match is not None, "unsupported step field syntax")
         key, value = match.groups()
         require(key in {"name", "if", "run"}, "unsupported run-step field: " + key)
         require(key not in fields, "duplicate run-step field: " + key)
-        fields[key] = re.split(r"\s+#", value, maxsplit=1)[0].strip()
+        fields[key] = re.split(r"[ \t]+#", value, maxsplit=1)[0].strip(" \t")
         if key == "run":
             run = fields[key]
             require(run == "|" or not run.startswith(("|", ">", "'", '"')), "unsupported run scalar")
@@ -171,11 +172,12 @@ def commands(step):
 
 
 def target_for(command):
-    command = re.split(r"\s+#", command, maxsplit=1)[0].strip()
+    require(all(" " <= character <= "~" for character in command), "unsupported command character: expected printable ASCII")
+    command = re.split(r" +#", command, maxsplit=1)[0].strip(" ")
     if not command or command.startswith("#"):
         return None
-    require(not re.search(r"[^A-Za-z0-9_./=^$*+?()\[\]{}|:\s-]", command), "unsupported shell syntax")
-    words = command.split()
+    require(not re.search(r"[^A-Za-z0-9_./=^$*+?()\[\]{}|: -]", command), "unsupported shell syntax")
+    words = [word for word in command.split(" ") if word]
     require(words[:2] == ["go", "test"], "unsupported command: expected bare go test")
     require("-args" not in words, "unsupported -args: fuzz flags must reach go test")
     flags = {}
