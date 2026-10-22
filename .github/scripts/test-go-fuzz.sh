@@ -37,6 +37,16 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         print(f"PASS: {label}")
 
     expect_status(0, "both target steps run")
+    fake_job = "name: |\n" + good.removeprefix("jobs:\n") + "jobs:\n  real:\n    steps:\n      - run: echo done\n"
+    expect_status(1, "root scalar cannot impersonate go-fuzz", fake_job, "exactly one go-fuzz job")
+    expect_status(0, "root block scalar before real jobs", "name: |\n  description\n" + good)
+    expect_status(0, "single-line quoted YAML values", "name: 'description'\n" + good.replace("first target", '"first target"'))
+    expect_status(1, "quoted scalar cannot impersonate go-fuzz", fake_job.replace("name: |", 'name: "').replace("\njobs:\n", '\n  "\njobs:\n'), "unsupported multiline quoted YAML scalar")
+    expect_status(1, "jobs must be a root mapping", good.replace("jobs:", "jobs: |"), "root jobs mapping")
+    expect_status(1, "nested jobs mapping rejected", "wrapper:\n" + "\n".join("  " + line for line in good.splitlines()), "root jobs mapping")
+    expect_status(1, "duplicate root jobs mapping rejected", good + good, "root jobs mapping")
+    expect_status(1, "job scalar cannot supply steps", good.replace("go-fuzz:", "go-fuzz: |"), "exactly one go-fuzz job")
+    expect_status(1, "steps scalar cannot supply commands", good.replace("steps:", "steps: |"), "one go-fuzz steps list")
     expect_status(1, "removed target run", prefix + first, "FuzzBeta")
     expect_status(1, "YAML comment cannot supply flags", good.replace("-fuzz=FuzzBeta", "# -fuzz=FuzzBeta"), "expected exactly one")
     expect_status(1, "commented-out run cannot supply coverage", good.replace("        run: go test -fuzz=FuzzBeta", "        # run: go test -fuzz=FuzzBeta"), "FuzzBeta")
@@ -98,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
 
     for label, content, reason in [
         ("missing job", good.replace("  go-fuzz:", "  other:"), "exactly one go-fuzz job"),
-        ("duplicate job", good + good, "exactly one go-fuzz job"),
+        ("duplicate job", good + good.removeprefix("jobs:\n"), "exactly one go-fuzz job"),
         ("missing steps", good.replace("    steps:", "    absent:"), "one go-fuzz steps list"),
         ("duplicate steps", good + "    steps:\n", "one go-fuzz steps list"),
         ("bad step structure", good.replace("      - name: first target", "        name: first target"), "unsupported steps structure"),
@@ -107,13 +117,36 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         ("working directory override", good.replace(second, second + "        working-directory: elsewhere\n"), "unsupported run-step field"),
         ("duplicate condition", good.replace(second, second + "        if: true\n        if: true\n"), "duplicate run-step field"),
         ("folded scalar", good.replace("run: go test", "run: >\n          go test"), "unsupported run scalar"),
-        ("quoted scalar", good.replace("run: go test", "run: 'go test"), "unsupported run scalar"),
+        ("quoted scalar", good.replace("run: go test", "run: 'go test").replace("./services/alpha/", "./services/alpha/'").replace("./services/beta/", "./services/beta/'"), "unsupported run scalar"),
     ]:
         expect_status(1, label, content, reason)
 
     extra = fixture / "services/alpha/extra_test.go"
     extra.write_text("package alpha\nfunc FuzzNew(f *testing.F) {}\n", encoding="utf-8")
     expect_status(1, "new fuzz target requires command", reason="FuzzNew")
+    extra.write_text("package alpha\nfunc helper() {}; func FuzzNew(f *testing.F) {}\n", encoding="utf-8")
+    expect_status(1, "same-line fuzz declaration requires command", reason="FuzzNew")
+    expect_status(0, "same-line fuzz declaration with command", good + "      - run: go test -fuzz=FuzzNew -fuzztime=30s ./services/alpha/\n")
+    for name in ["FuzzÉ", "FuzzAlphaÉ", "Fuzz"]:
+        extra.write_text(f"package alpha\nfunc {name}(f *testing.F) {{}}\n", encoding="utf-8")
+        expect_status(1, f"unsupported Go fuzz name {name} rejected explicitly", reason="unsupported fuzz target name: " + name)
+    for name in ["Fuzzé", "Fuzzhelper"]:
+        extra.write_text(f"package alpha\nfunc {name}(f *testing.F) {{}}\n", encoding="utf-8")
+        expect_status(0, f"lowercase suffix {name} is not a Go fuzz name")
+    extra.write_text("package alpha\ntype helper struct{}\nfunc (helper) FuzzMethod(f *testing.F) {}\n", encoding="utf-8")
+    expect_status(0, "receiver method is not a top-level fuzz declaration")
+    for name in ["Fuzz0", "Fuzz_"]:
+        extra.write_text(f"package alpha\nfunc {name}(f *testing.F) {{}}\n", encoding="utf-8")
+        expect_status(0, f"Go fuzz name {name} has a command", good + f"      - run: go test -fuzz={name} -fuzztime=30s ./services/alpha/\n")
+    extra.write_text("package alpha\nfunc FuzzAlphaExtra(f *testing.F) {}\n", encoding="utf-8")
+    expect_status(1, "prefix-colliding selectors cannot supply coverage", good + "      - run: go test -fuzz=FuzzAlphaExtra -fuzztime=30s ./services/alpha/\n", "ambiguous -fuzz selector: FuzzAlpha")
+    extra.write_text("package alpha\n", encoding="utf-8")
+    expect_status(0, "unique substring selector follows Go regex matching", good.replace("FuzzAlpha -fuzztime", "FuzzAl -fuzztime"))
+    expect_status(1, "unmatched selector rejected explicitly", good.replace("FuzzAlpha -fuzztime", "FuzzAbsent -fuzztime"), "no matching Go fuzz target")
+    other_package = fixture / "services/beta/extra_test.go"
+    other_package.write_text("package beta\nfunc FuzzAlphaExtra(f *testing.F) {}\n", encoding="utf-8")
+    expect_status(0, "selector ambiguity is scoped to its package", good + "      - run: go test -fuzz=FuzzAlphaExtra -fuzztime=30s ./services/beta/\n")
+    other_package.write_text("package beta\n", encoding="utf-8")
     extra.write_text('// func FuzzComment(f *testing.F) {}\n/*\nfunc FuzzBlock(f *testing.F) {}\n*/\nvar example = `\nfunc FuzzString(f *testing.F) {}\n`\n', encoding="utf-8")
     expect_status(0, "Go comments and strings are not targets")
     for path in fixture.rglob("*_test.go"):
@@ -121,10 +154,9 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
     expect_status(1, "empty inventory fails closed", reason="empty Go fuzz target inventory")
 
     for relative, source in real_sources:
-        if re.search(r"(?m)^func Fuzz", source):
-            path = fixture / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(source, encoding="utf-8")
+        path = fixture / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
     expect_status(0, "both real target steps run", real_workflow)
     job = re.search(r"(?ms)^  go-fuzz:\n(.*?)(?=^  \S|\Z)", real_workflow).group(1)
     real_runs = re.findall(r"(?m)^        run: go test -fuzz=(\w+) -fuzztime=\S+ \S+\n", job)
