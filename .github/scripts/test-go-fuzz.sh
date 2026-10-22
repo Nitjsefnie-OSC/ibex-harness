@@ -37,6 +37,24 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         print(f"PASS: {label}")
 
     expect_status(0, "both target steps run")
+    scalar_job = "jobs:\n  real:\n    steps:\n      - run: echo done\n    name : \"\n" + good.removeprefix("jobs:\n") + "    \"\n"
+    expect_status(1, "spaced colon cannot hide a multiline scalar", scalar_job, "unsupported multiline quoted YAML scalar")
+    expect_status(1, "anchor property cannot hide a multiline scalar", scalar_job.replace('name : "', 'name: &label "'), "unsupported YAML scalar property")
+    expect_status(1, "tag property cannot hide a multiline scalar", scalar_job.replace('name : "', 'name: !!str "'), "unsupported YAML scalar property")
+    expect_status(0, "spaced colon with ordinary single-line value", "name : description\n" + good.replace("name: first target", "name : first target"))
+    for separator in ["  : ", "\t:\t"]:
+        expect_status(1, "key colon whitespace preserves quote detection", scalar_job.replace("name : ", "name" + separator), "unsupported multiline quoted YAML scalar")
+    for value in ['&label "safe"', '!!str "safe"', '*label', '!<tag:yaml.org,2002:str> "safe"']:
+        expect_status(1, "root scalar property rejected: " + value, "name: " + value + "\n" + good, "unsupported YAML scalar property")
+    for key in ["'name'", '"name"', "display name", "? name"]:
+        expect_status(1, "unsupported key form rejected: " + key, scalar_job.replace("name : ", key + ": "), "unsupported YAML key or line")
+    for value in ['["', '{label: "']:
+        expect_status(1, "uncertain flow scalar rejected: " + value, scalar_job.replace('name : "', "name: " + value), "unsupported YAML flow scalar")
+    expect_status(1, "flow alias rejected", "name: [*label]\n" + good, "unsupported YAML flow scalar")
+    expect_status(1, "missing colon separation rejected", scalar_job.replace('name : "', 'name:"'), "unsupported YAML key or line")
+    expect_status(1, "unmodeled scalar indicator rejected", "name: ? unknown\n" + good, "unsupported YAML key or line")
+    expect_status(1, "uncertain block header rejected", "name: |unknown\n" + good, "unsupported YAML block scalar")
+    expect_status(0, "supported inline collections remain valid", "permissions: {}\n" + good.replace("    steps:", "    needs: [first, second]\n    steps:"))
     fake_job = "name: |\n" + good.removeprefix("jobs:\n") + "jobs:\n  real:\n    steps:\n      - run: echo done\n"
     expect_status(1, "root scalar cannot impersonate go-fuzz", fake_job, "exactly one go-fuzz job")
     expect_status(0, "root block scalar before real jobs", "name: |\n  description\n" + good)
@@ -112,8 +130,8 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-", dir=root) as temporary:
         ("missing steps", good.replace("    steps:", "    absent:"), "one go-fuzz steps list"),
         ("duplicate steps", good + "    steps:\n", "one go-fuzz steps list"),
         ("bad step structure", good.replace("      - name: first target", "        name: first target"), "unsupported steps structure"),
-        ("bad run indentation", good + "          stray\n", "unsupported run indentation"),
-        ("bad step field", good.replace("        run:", "        invalid field\n        run:"), "unsupported step field syntax"),
+        ("bad run indentation", good + "          stray: value\n", "unsupported run indentation"),
+        ("bad step field", good.replace("        run:", "        Invalid: value\n        run:"), "unsupported step field syntax"),
         ("working directory override", good.replace(second, second + "        working-directory: elsewhere\n"), "unsupported run-step field"),
         ("duplicate condition", good.replace(second, second + "        if: true\n        if: true\n"), "duplicate run-step field"),
         ("folded scalar", good.replace("run: go test", "run: >\n          go test"), "unsupported run scalar"),
