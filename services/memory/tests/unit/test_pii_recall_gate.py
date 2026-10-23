@@ -15,7 +15,8 @@ import pytest
 def recall_structured(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     path = Path(__file__).resolve().parents[4] / "benchmarks/memory/pii/recall_structured.py"
     spec = importlib.util.spec_from_file_location("recall_structured", path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
