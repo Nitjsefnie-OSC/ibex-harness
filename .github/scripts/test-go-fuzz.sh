@@ -259,6 +259,18 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-") as temporary:
     expect_status(0, "both real target steps run", real_workflow)
     jwt_step = re.search(r"(?m)^      - name: Run Go fuzz smoke \(JWT[^\n]*\n(?:        [^\n]*\n)*", real_workflow).group(0)
     unconditional_jwt = re.sub(r"(?m)^        if:.*\n", "", jwt_step)
+    expect_status(0, "conditioned shortened JWT selector covers resolved target",
+                  real_workflow.replace(jwt_step, jwt_step.replace("-fuzz=FuzzSplitJWTAndHeader", "-fuzz=FuzzSplit"), 1))
+    expect_status(1, "ungated shortened JWT selector requires resolved target condition",
+                  real_workflow.replace(jwt_step, unconditional_jwt.replace("-fuzz=FuzzSplitJWTAndHeader", "-fuzz=FuzzSplit"), 1),
+                  "JWT fuzz step must use if: ${{ !cancelled() }}")
+    expect_status(0, "isolated JWT literal command allows comments and blank lines",
+                  real_workflow.replace(jwt_step, jwt_step.replace("        run: ", "        run: |\n          # JWT command\n\n          ", 1), 1))
+    chat_step = re.search(r"(?m)^      - name: Run Go fuzz smoke \(chat request parser\)\n        run: (.*)\n", real_workflow)
+    combined_jwt = jwt_step.replace("        run: ", "        run: |\n          " + chat_step[1] + "\n          ", 1)
+    expect_status(1, "combined chat and JWT literal block cannot supply independent coverage",
+                  real_workflow.replace(chat_step[0], "", 1).replace(jwt_step, combined_jwt, 1),
+                  "JWT fuzz command must be isolated in its run step")
     for condition in [None, "true", "success()", "${{ success() }}", "always()", "${{ always() }}"]:
         changed_step = unconditional_jwt if condition is None else unconditional_jwt + "        if: " + condition + "\n"
         reason = ("JWT fuzz step must use if: ${{ !cancelled() }}" if condition in (None, "true")

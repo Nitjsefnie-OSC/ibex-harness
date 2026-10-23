@@ -15,8 +15,9 @@ from pathlib import Path
 # order), Name=Fuzz[A-Z0-9_][A-Za-z0-9_]*, N=positive integer, u=ns|us|ms|s|m|h,
 # <= int64 ns. Executable text uses printable ASCII with ASCII spaces between words.
 # Step conditions may be absent, true, false, or exactly ${{ !cancelled() }};
-# false supplies no coverage. FuzzSplitJWTAndHeader requires ${{ !cancelled() }}
-# to run after earlier failures while respecting cancellation. Trailing
+# false supplies no coverage. The resolved target FuzzSplitJWTAndHeader requires
+# ${{ !cancelled() }} and must be the sole command in its run step (comments and
+# blank lines are ignored) to run after earlier failures while respecting cancellation. Trailing
 # ASCII-space-separated # comments may contain Unicode and tabs. Anchors, compound/fractional
 # durations, other flags, shell syntax and other run-step fields fail loudly.
 # Block scalar contents are not mapping keys; quoted YAML scalars must fit one line.
@@ -232,6 +233,8 @@ try:
                 require(matches, "no matching Go fuzz target for -fuzz selector: " + selector + " (" + package + ")")
                 require(matches[0] != "FuzzSplitJWTAndHeader" or condition == "${{ !cancelled() }}",
                         "JWT fuzz step must use if: ${{ !cancelled() }} to run after failure and respect cancellation")
+                require(matches[0] != "FuzzSplitJWTAndHeader" or len(step_commands) == 1,
+                        "JWT fuzz command must be isolated in its run step")
                 covered.add((matches[0], package))
     missing = sorted(targets - covered)
     require(not missing, "go-fuzz lacks bounded commands for: " + ", ".join(f"{name} ({package})" for name, package in missing))
