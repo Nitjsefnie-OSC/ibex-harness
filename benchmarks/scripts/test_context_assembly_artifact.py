@@ -67,7 +67,7 @@ def test_harness_serializes_and_validates_stub_result(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("profile,latency,attempted,failed,max_error_rate,expected", [
+@pytest.mark.parametrize("case", [
     ("stub", 49.99, 100, 0, 0.0, 0),
     ("stub", 50.0, 100, 0, 0.0, 1),
     ("stub", 50.01, 100, 0, 0.0, 1),
@@ -77,9 +77,8 @@ def test_harness_serializes_and_validates_stub_result(tmp_path, monkeypatch):
     ("live", 50.0, 100, 0, 0.0, 0),
     ("stub", 0.0, 100, 100, 0.0, 2),
 ])
-def test_harness_gate_exit_codes(
-    tmp_path, monkeypatch, profile, latency, attempted, failed, max_error_rate, expected,
-):
+def test_harness_gate_exit_codes(tmp_path, monkeypatch, case):
+    profile, latency, attempted, failed, max_error_rate, expected = case
     monkeypatch.chdir(tmp_path)
     succeeded = attempted - failed
     stats = load._DriveStats((latency,) * succeeded, attempted, succeeded, failed)
