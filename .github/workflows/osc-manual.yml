@@ -62,6 +62,16 @@ jobs:
       - name: Benchmark pipeline unit tests
         run: python benchmarks/scripts/test_pipeline.py
 
+      # Mirrors the upstream benchmark-gate job's context artifact step; the
+      # target_ref must carry benchmarks/scripts/test_context_assembly_artifact.py.
+      - name: Context artifact gate tests
+        run: |
+          bash infra/scripts/context-uv-sync.sh
+          uv pip install --python services/context/.venv/bin/python \
+            --only-binary :all: --require-hashes \
+            -r .github/requirements/jsonschema.txt
+          services/context/.venv/bin/python -m pytest benchmarks/scripts/test_context_assembly_artifact.py
+
       - name: Set up pnpm web
         uses: ./.github/actions/setup-pnpm-web
 
