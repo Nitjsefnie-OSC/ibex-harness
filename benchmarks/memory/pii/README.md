@@ -17,5 +17,10 @@ budget; >95% structured recall gate).
 
 The `memory-test` CI job runs the harness via `infra/scripts/memory-test-ci.sh`.
 Recall must be >0.95; a regression exits 1 and fails the gate.
+
+Contributors maintain the seeded synthetic `FIXTURES` in `recall_structured.py`
+through pull requests; never use live tenant data. Re-validate the fixture totals
+and expected hit counts in `test_pii_recall_gate.py` whenever fixtures change.
+
 Use `--output PATH` to write results elsewhere. Without it, the harness rewrites
 `recall_structured.json` beside the script; the committed JSON is the docs baseline.
