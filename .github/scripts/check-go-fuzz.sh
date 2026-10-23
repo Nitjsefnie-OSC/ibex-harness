@@ -14,7 +14,9 @@ from pathlib import Path
 # Commands are bare `go test -fuzz=Name -fuzztime=Nu ./package/` (flags in either
 # order), Name=Fuzz[A-Z0-9_][A-Za-z0-9_]*, N=positive integer, u=ns|us|ms|s|m|h,
 # <= int64 ns. Executable text uses printable ASCII with ASCII spaces between words.
-# Only absent/true/false step conditions; false supplies no coverage. Trailing
+# Step conditions may be absent, true, false, or exactly ${{ !cancelled() }};
+# false supplies no coverage. FuzzSplitJWTAndHeader requires ${{ !cancelled() }}
+# to run after earlier failures while respecting cancellation. Trailing
 # ASCII-space-separated # comments may contain Unicode and tabs. Anchors, compound/fractional
 # durations, other flags, shell syntax and other run-step fields fail loudly.
 # Block scalar contents are not mapping keys; quoted YAML scalars must fit one line.
@@ -158,7 +160,7 @@ def job_steps(workflow):
 def commands(step):
     # Action metadata is irrelevant to this assertion; inspect only run steps.
     if not any(line.startswith("run:") for line in step):
-        return []
+        return "true", []
     fields, body = {}, []
     for line in step:
         if line.startswith("  "):
@@ -175,11 +177,11 @@ def commands(step):
             run = fields[key]
             require(run == "|" or not run.startswith(("|", ">", "'", '"')), "unsupported run scalar")
     condition = fields.get("if", "true")
-    require(condition in {"true", "false"}, "unsupported step condition: " + condition)
+    require(condition in {"true", "false", "${{ !cancelled() }}"}, "unsupported step condition: " + condition)
     if condition == "false":
-        return []
+        return condition, []
     run = fields["run"]
-    return body if run == "|" else [run]
+    return condition, body if run == "|" else [run]
 
 
 def target_for(command):
@@ -220,13 +222,16 @@ try:
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     covered = set()
     for step in job_steps(workflow):
-        for command in commands(step):
+        condition, step_commands = commands(step)
+        for command in step_commands:
             target = target_for(command)
             if target is not None:
                 selector, package = target
                 matches = sorted(name for name, directory in targets if directory == package and re.search(selector, name))
                 require(len(matches) <= 1, "ambiguous -fuzz selector: " + selector + " (" + package + "): " + ", ".join(matches))
                 require(matches, "no matching Go fuzz target for -fuzz selector: " + selector + " (" + package + ")")
+                require(matches[0] != "FuzzSplitJWTAndHeader" or condition == "${{ !cancelled() }}",
+                        "JWT fuzz step must use if: ${{ !cancelled() }} to run after failure and respect cancellation")
                 covered.add((matches[0], package))
     missing = sorted(targets - covered)
     require(not missing, "go-fuzz lacks bounded commands for: " + ", ".join(f"{name} ({package})" for name, package in missing))

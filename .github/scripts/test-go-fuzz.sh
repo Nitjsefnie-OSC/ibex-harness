@@ -136,6 +136,9 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-") as temporary:
     expect_status(1, "commented-out run cannot supply coverage", good.replace("        run: go test -fuzz=FuzzBeta", "        # run: go test -fuzz=FuzzBeta"), "FuzzBeta")
     expect_status(1, "disabled step cannot supply coverage", good.replace(second, second + "        if: false\n"), "FuzzBeta")
     expect_status(0, "explicit true condition", good.replace(second, second + "        if: true\n"))
+    for condition in ["${{ !cancelled() }}", "${{ !cancelled() }} # respect cancellation"]:
+        expect_status(0, "cancellation-aware step condition: " + condition,
+                      good.replace(second, second + "        if: " + condition + "\n"))
     expect_status(1, "unknown condition fails closed", good.replace(second, second + "        if: success()\n"), "unsupported step condition")
     expect_status(1, "expression condition fails closed", good.replace(second, second + "        if: ${{ inputs.fuzz }}\n"), "unsupported step condition")
 
@@ -254,6 +257,14 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-") as temporary:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
     expect_status(0, "both real target steps run", real_workflow)
+    jwt_step = re.search(r"(?m)^      - name: Run Go fuzz smoke \(JWT[^\n]*\n(?:        [^\n]*\n)*", real_workflow).group(0)
+    unconditional_jwt = re.sub(r"(?m)^        if:.*\n", "", jwt_step)
+    for condition in [None, "true", "success()", "${{ success() }}", "always()", "${{ always() }}"]:
+        changed_step = unconditional_jwt if condition is None else unconditional_jwt + "        if: " + condition + "\n"
+        reason = ("JWT fuzz step must use if: ${{ !cancelled() }}" if condition in (None, "true")
+                  else "unsupported step condition: " + condition)
+        expect_status(1, "JWT step rejects success gating or cancellation bypass: " + str(condition),
+                      real_workflow.replace(jwt_step, changed_step, 1), reason)
     for field, value in [("working-directory", "services/auth"), ("shell", "python")]:
         for location in ["before", "after"]:
             defaults = f"defaults:\n  run:\n    {field}: {value}\n"
@@ -277,7 +288,7 @@ with tempfile.TemporaryDirectory(prefix="go-fuzz-test-") as temporary:
     expect_status(1, "duplicate job condition", real_workflow.replace("  go-fuzz:\n", "  go-fuzz:\n    if: true\n"),
                   "duplicate go-fuzz job condition")
     expect_status(1, "disabled real step cannot supply coverage",
-                  real_workflow.replace("        run: go test -fuzz=FuzzSplitJWTAndHeader", "        if: false\n        run: go test -fuzz=FuzzSplitJWTAndHeader"),
+                  real_workflow.replace(jwt_step, unconditional_jwt + "        if: false\n", 1),
                   "FuzzSplitJWTAndHeader")
     for character in ["\u0085", "\u2028", "\u2029"]:
         expect_status(0, "real workflow Unicode name: " + ascii(character),
