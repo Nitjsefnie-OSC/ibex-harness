@@ -272,21 +272,19 @@ export function hasPublishedBenchmarkPages(suite: BenchmarkSuite): boolean {
 
 /** Flat leaf list for sitemap / mobile drawer (hub + available suite pages). Dedupes proxy hub URL. */
 export function buildBenchmarkNavPages(): readonly SuiteNavPage[] {
-  const pages: SuiteNavPage[] = [BENCHMARK_HUB_PAGE, CROSS_SUITE_COMPARE_PAGE];
-  const seen = new Set<string>([BENCHMARK_HUB_PAGE.url, CROSS_SUITE_COMPARE_PAGE.url]);
-  for (const suite of BENCHMARK_SUITES) {
-    if (!hasPublishedBenchmarkPages(suite)) {
-      continue;
+  const pages = [
+    BENCHMARK_HUB_PAGE,
+    CROSS_SUITE_COMPARE_PAGE,
+    ...BENCHMARK_SUITES.filter(hasPublishedBenchmarkPages).flatMap((suite) => suite.navPages),
+  ];
+  const seen = new Set<string>();
+  return pages.filter((page) => {
+    if (seen.has(page.url)) {
+      return false;
     }
-    for (const page of suite.navPages) {
-      if (seen.has(page.url)) {
-        continue;
-      }
-      seen.add(page.url);
-      pages.push(page);
-    }
-  }
-  return pages;
+    seen.add(page.url);
+    return true;
+  });
 }
 
 function collectLeafPageIcons(): Record<string, LucideIcon> {
