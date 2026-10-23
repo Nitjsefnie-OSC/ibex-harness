@@ -62,10 +62,14 @@ jobs:
       - name: Benchmark pipeline unit tests
         run: python benchmarks/scripts/test_pipeline.py
 
-      # Mirrors the upstream benchmark-gate job's context artifact step; the
-      # target_ref must carry benchmarks/scripts/test_context_assembly_artifact.py.
+      # Mirrors the upstream benchmark-gate job's context artifact step; runs
+      # only when the target_ref carries the module, and says so when it skips.
       - name: Context artifact gate tests
         run: |
+          if [ ! -f benchmarks/scripts/test_context_assembly_artifact.py ]; then
+            echo "SKIP loud: target_ref has no benchmarks/scripts/test_context_assembly_artifact.py"
+            exit 0
+          fi
           bash infra/scripts/context-uv-sync.sh
           uv pip install --python services/context/.venv/bin/python \
             --only-binary :all: --require-hashes \
