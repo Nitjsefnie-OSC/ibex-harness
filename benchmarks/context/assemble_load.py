@@ -256,7 +256,7 @@ def _raise_error_rate_range(raw: str) -> None:
     )
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("stub", "live"), default="stub")
     parser.add_argument("--addr", default="127.0.0.1:9092")
@@ -269,7 +269,11 @@ def main() -> int:
         default=0.0,
         help="Fail when failed/attempted exceeds this fraction (default 0; range 0..1).",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
 
     if args.profile == "stub":
         stats = asyncio.run(_run_stub(args.duration, args.rps))
