@@ -100,6 +100,10 @@ jobs:
         if: ${{ hashFiles('site/package.json') != '' }}
         run: pnpm --filter site typecheck
 
+      - name: Site build
+        if: ${{ hashFiles('site/package.json') != '' }}
+        run: pnpm --filter site build
+
       - name: Site e2e tests
         if: ${{ hashFiles('site/package.json') != '' }}
         run: |
