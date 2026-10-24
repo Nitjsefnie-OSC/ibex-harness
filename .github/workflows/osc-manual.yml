@@ -38,8 +38,14 @@ jobs:
 
       - name: Provenance
         run: |
-          echo "osc-manual target_ref=${{ inputs.target_ref }}"
-          echo "osc-manual sha=$(git rev-parse HEAD)"
+          set -euo pipefail
+          echo "tested_target_ref=${{ inputs.target_ref }}"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ ! "$checked_out_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::git rev-parse HEAD did not produce a 40-character commit SHA: $checked_out_sha"
+            exit 1
+          fi
+          printf 'checked-out SHA: %s\n' "$checked_out_sha"
 
       - name: Repo guards
         run: |
@@ -76,11 +82,26 @@ jobs:
             -r .github/requirements/jsonschema.txt
           services/context/.venv/bin/python -m pytest benchmarks/scripts/test_context_assembly_artifact.py
 
-      - name: Set up pnpm web
-        uses: ./.github/actions/setup-pnpm-web
+      # Mirror the upstream site-build job's gates for a target_ref that
+      # carries the site workspace (the old web/ workspace is gone since the
+      # site rebuild), and say so loudly when it skips.
+      - name: Site workspace guard
+        run: |
+          if [ ! -f site/package.json ]; then
+            echo "SKIP loud: target_ref has no site/ workspace"
+            exit 0
+          fi
 
-      - name: Web typecheck
-        run: pnpm --filter web typecheck
+      - name: Set up pnpm site
+        if: ${{ hashFiles('site/package.json') != '' }}
+        uses: ./.github/actions/setup-pnpm-node
 
-      - name: Web tests
-        run: pnpm --filter web test
+      - name: Site typecheck
+        if: ${{ hashFiles('site/package.json') != '' }}
+        run: pnpm --filter site typecheck
+
+      - name: Site e2e tests
+        if: ${{ hashFiles('site/package.json') != '' }}
+        run: |
+          pnpm --filter site exec playwright install --with-deps chromium # NOSONAR
+          pnpm --filter site test:e2e
