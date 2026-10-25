@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
-import subprocess  # nosec B404 - validator subprocess below uses a static argv
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +15,10 @@ import pytest
 from benchmark_test_support import ROOT, SCRIPTS, load_module
 
 load = load_module("assemble_load", ROOT / "benchmarks/context/assemble_load.py")
+VALIDATOR = load_module(
+    "validate_published_context_assembly",
+    SCRIPTS / "validate_published_context_assembly.py",
+)
 SCHEMA = ROOT / "benchmarks/data-schema/context-assembly-benchmark-data.schema.json"
 DATA_NAME = "context-assembly-benchmark-data.json"
 EXPECTED = {
@@ -54,14 +59,22 @@ def _run_harness(monkeypatch, stats, *, profile="stub", max_error_rate=0.0) -> i
         return exc.code
 
 
-def _validate_cli() -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # nosec B603 - static argv, no shell  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-        [sys.executable, str(SCRIPTS / "validate_published_context_assembly.py"),
-         "--strict", DATA_NAME],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def _run_validator(monkeypatch) -> tuple[int, str]:
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "argv", [
+        "validate_published_context_assembly.py", "--strict", DATA_NAME,
+    ])
+    with contextlib.redirect_stderr(stderr):
+        try:
+            VALIDATOR.main()
+            code = 0
+        except SystemExit as exc:
+            code = exc.code
+        except jsonschema.ValidationError as exc:
+            # A CLI run would die on this traceback; mirror its final line.
+            sys.stderr.write(f"{type(exc).__module__}.{type(exc).__name__}: {exc}\n")
+            code = 1
+    return code, stderr.getvalue()
 
 
 def test_harness_serializes_and_validates_stub_result(tmp_path, monkeypatch):
@@ -71,8 +84,8 @@ def test_harness_serializes_and_validates_stub_result(tmp_path, monkeypatch):
     payload = json.loads(Path(DATA_NAME).read_text(encoding="utf-8"))
     _CASES.assertEqual(payload, EXPECTED)
     jsonschema.validate(payload, json.loads(SCHEMA.read_text(encoding="utf-8")))
-    result = _validate_cli()
-    _CASES.assertEqual(result.returncode, 0, result.stderr)
+    code, stderr = _run_validator(monkeypatch)
+    _CASES.assertEqual(code, 0, stderr)
 
 
 @pytest.mark.parametrize("case", [
@@ -128,16 +141,16 @@ def test_schema_rejects_live_profile():
 def test_validator_cli_rejects_malformed_artifact(tmp_path, monkeypatch, payload):
     monkeypatch.chdir(tmp_path)
     Path(DATA_NAME).write_text(json.dumps(payload), encoding="utf-8")
-    result = _validate_cli()
-    _CASES.assertNotEqual(result.returncode, 0)
-    _CASES.assertIn("ValidationError", result.stderr)
+    code, stderr = _run_validator(monkeypatch)
+    _CASES.assertNotEqual(code, 0)
+    _CASES.assertIn("ValidationError", stderr)
 
 
 def test_validator_cli_rejects_missing_artifact(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    result = _validate_cli()
-    _CASES.assertNotEqual(result.returncode, 0)
-    _CASES.assertIn("file not found", result.stderr)
+    code, stderr = _run_validator(monkeypatch)
+    _CASES.assertNotEqual(code, 0)
+    _CASES.assertIn("file not found", stderr)
 
 
 def test_strict_validator_requires_jsonschema(tmp_path, monkeypatch):
