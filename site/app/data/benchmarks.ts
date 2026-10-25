@@ -54,13 +54,6 @@ export const benchmarkMeta = {
   },
 } as const
 
-/**
- * Context's route is not implemented; its registry entry and data contract are live.
- */
-export function hasPublishedBenchmarkPages(suite: keyof typeof benchmarkMeta): boolean {
-  return suite !== 'contextAssembly'
-}
-
 export function formatNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
   return new Intl.NumberFormat('en-US', {
