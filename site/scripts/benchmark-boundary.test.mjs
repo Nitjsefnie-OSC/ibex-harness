@@ -52,11 +52,16 @@ describe('withheld-suite boundary', () => {
         `blog: /blog/context-assembly-budget`,
         `data: /benchmarks/${artifact}`,
       ].join('\n'))
-      assert.deepEqual(await findWithheldSuiteLeaks(root), [
+      await writeFile(join(root, 'content/docs/y.mdx'), [
+        `mdx: [guide](/benchmarks/${slug})`,
+      ].join('\n'))
+      // readdir order across files is not guaranteed; compare the full set.
+      assert.deepEqual([...(await findWithheldSuiteLeaks(root))].sort(), [
         'content/docs/x.md:1',
         'content/docs/x.md:2',
         'content/docs/x.md:3',
         'content/docs/x.md:4',
+        'content/docs/y.mdx:1',
       ])
     } finally {
       await rm(root, { recursive: true, force: true })

@@ -75,7 +75,7 @@ export async function findWithheldSuiteLeaks(siteRoot = site) {
   }
 
   for (const file of await walk(join(siteRoot, 'content'))) {
-    if (!/\.md$/.test(file)) continue
+    if (!/\.mdx?$/.test(file)) continue
     const source = await readFile(file, 'utf8')
     for (const { slug } of withheldSuites) {
       for (const line of contentLeakLines(slug, source)) {
