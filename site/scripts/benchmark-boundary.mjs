@@ -36,10 +36,36 @@ export function leakLines(slug, artifact, source) {
  * one pattern covers them.
  */
 function contentLeakLines(slug, source) {
-  const route = new RegExp(`/benchmarks/${slug}(?![\\w-])`)
+  const route = new RegExp(String.raw`/benchmarks/${slug}(?![\w-])`)
   return source
     .split(/\r?\n/)
     .flatMap((line, index) => route.test(line) ? [index + 1] : [])
+}
+
+/**
+ * Every file under `entry`, recursing through directories; a single file
+ * passes through unchanged.
+ */
+async function walk(entry) {
+  const info = await stat(entry)
+  if (!info.isDirectory()) return [entry]
+  const entries = await readdir(entry)
+  const files = []
+  for (const name of entries) files.push(...await walk(join(entry, name)))
+  return files
+}
+
+/**
+ * The scanned files of a surface with their sources, read up front so the
+ * scan pass over the pairs stays synchronous — no `await` inside a loop.
+ */
+async function collectScanFiles(entries, pattern) {
+  const files = (await Promise.all(entries.map(walk)))
+    .flat()
+    .filter((file) => pattern.test(file))
+  return Promise.all(
+    files.map(async (file) => ({ file, source: await readFile(file, 'utf8') })),
+  )
 }
 
 /**
@@ -50,38 +76,25 @@ function contentLeakLines(slug, source) {
  * code, not a rendered surface, so it is not scanned.
  */
 export async function findWithheldSuiteLeaks(siteRoot = site) {
-  const leaks = []
-  const surfaces = [join(siteRoot, 'app'), join(siteRoot, 'nuxt.config.ts')]
+  const rendered = await collectScanFiles(
+    [join(siteRoot, 'app'), join(siteRoot, 'nuxt.config.ts')],
+    /\.(?:vue|ts)$/,
+  )
+  const content = await collectScanFiles([join(siteRoot, 'content')], /\.mdx?$/)
 
-  async function walk(entry) {
-    const info = await stat(entry)
-    if (!info.isDirectory()) return [entry]
-    const entries = await readdir(entry)
-    const files = []
-    for (const name of entries) files.push(...await walk(join(entry, name)))
-    return files
-  }
-
-  for (const surface of surfaces) {
-    for (const file of await walk(surface)) {
-      if (!/\.(?:vue|ts)$/.test(file)) continue
-      const source = await readFile(file, 'utf8')
-      for (const { slug, artifact } of withheldSuites) {
-        for (const line of leakLines(slug, artifact, source)) {
-          leaks.push(`${relative(siteRoot, file)}:${line}`)
-        }
-      }
-    }
-  }
-
-  for (const file of await walk(join(siteRoot, 'content'))) {
-    if (!/\.mdx?$/.test(file)) continue
-    const source = await readFile(file, 'utf8')
-    for (const { slug } of withheldSuites) {
-      for (const line of contentLeakLines(slug, source)) {
-        leaks.push(`${relative(siteRoot, file)}:${line}`)
-      }
-    }
-  }
-  return leaks
+  const renderedLeaks = rendered.flatMap(({ file, source }) =>
+    withheldSuites.flatMap(({ slug, artifact }) =>
+      leakLines(slug, artifact, source).map(
+        (line) => `${relative(siteRoot, file)}:${line}`,
+      ),
+    ),
+  )
+  const contentLeaks = content.flatMap(({ file, source }) =>
+    withheldSuites.flatMap(({ slug }) =>
+      contentLeakLines(slug, source).map(
+        (line) => `${relative(siteRoot, file)}:${line}`,
+      ),
+    ),
+  )
+  return [...renderedLeaks, ...contentLeaks]
 }
