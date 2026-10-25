@@ -162,3 +162,82 @@ jobs:
 
           print("PROBE OK")
           PY
+
+      # Governing rule: a PR's whole probe set goes in ONE workflow dispatch —
+      # this same run enumerates every origin/adv/1025-* mutant branch, runs
+      # each one's suite and reports per mutant killed or survived; never a
+      # chain of dispatches.
+      # Environment convention: pnpm is NOT guaranteed on PATH in this job, so
+      # a mutant whose command needs pnpm must provide its own setup inside
+      # `command`.
+      - name: Mutant probe loop
+        run: |
+          set -euo pipefail
+          # --list with a glob: modern git rejects `branch -r <branchname>`
+          # outright, which would make the enumeration empty and skip silently.
+          branches="$(git branch -r --format='%(refname:short)' --list 'origin/adv/1025-*' | grep '^origin/adv/1025-' || true)"
+          if [ -z "$branches" ]; then
+            echo "SKIP loud: no adv/1025-* mutant branches"
+            exit 0
+          fi
+
+          report="$RUNNER_TEMP/osc-adv-probe-report.txt"
+          table="$RUNNER_TEMP/osc-adv-probe-table.txt"
+          logs="$RUNNER_TEMP/osc-adv-probe-logs.txt"
+          : > "$table"
+          : > "$logs"
+          printf '%s\n' "name | ref | expect | exit | KILLED/SURVIVED/PASS/FAIL" >> "$table"
+          any_failed=0
+
+          for branch in $branches; do
+            slug="$(echo "$branch" | tr '/' '-')"
+            log="$RUNNER_TEMP/probe-$slug.log"
+            : > "$log"
+            name="$branch"
+            expect="(unreadable)"
+            item_exit="(not run)"
+            verdict="FAIL"
+
+            spec="$RUNNER_TEMP/probe-spec.json"
+            if ! git show "$branch:.adv-probe.json" > "$spec" 2>>"$log"; then
+              echo "spec read failed for $branch:.adv-probe.json" >> "$log"
+            elif name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$spec" 2>>"$log")" \
+              && expect="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["expect"])' "$spec" 2>>"$log")" \
+              && mutant_command="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"], end="")' "$spec" 2>>"$log")"; then
+              worktree_path="$(mktemp -d "$RUNNER_TEMP/wt-XXXXXX")"
+              if git worktree add --detach "$worktree_path" "$branch" >>"$log" 2>&1; then
+                item_exit=0
+                ( cd "$worktree_path" && bash -e -c "$mutant_command" ) >>"$log" 2>&1 || item_exit=$?
+                if [ "$expect" = "red" ]; then
+                  if [ "$item_exit" -ne 0 ]; then verdict="KILLED"; else verdict="SURVIVED"; fi
+                elif [ "$expect" = "green" ]; then
+                  if [ "$item_exit" -eq 0 ]; then verdict="PASS"; else verdict="FAIL"; fi
+                else
+                  echo "unknown expect value: $expect" >> "$log"
+                  verdict="FAIL"
+                fi
+                git worktree remove --force "$worktree_path" >>"$log" 2>&1 || true
+              fi
+            fi
+
+            row="$name | $branch | $expect | $item_exit | $verdict"
+            echo "$row"
+            echo "$row" >> "$table"
+            { echo "===== $name ($branch) expect=$expect exit=$item_exit verdict=$verdict ====="; cat "$log"; echo; } >> "$logs"
+            if [ "$verdict" = "SURVIVED" ] || [ "$verdict" = "FAIL" ]; then
+              any_failed=1
+            fi
+          done
+
+          { cat "$table"; echo; echo "===== per-item logs ====="; cat "$logs"; } > "$report"
+          echo "===== per-item table ====="
+          cat "$table"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          exit "$any_failed"
+
+      - name: Upload the mutant probe report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: osc-adv-probe-report
+          path: ${{ runner.temp }}/osc-adv-probe-report.txt
