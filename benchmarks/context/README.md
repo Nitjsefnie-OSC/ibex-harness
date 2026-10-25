@@ -34,7 +34,7 @@ PYTHONPATH=packages/proto/gen/python:services/context \
   --profile stub --rps 500 --duration 10
 ```
 
-Add `--json web/public/benchmarks/context-assembly-benchmark-data.json` to write
+Add `--json site/public/benchmarks/context-assembly-benchmark-data.json` to write
 the profile, load settings, request counts, error rate, and latency percentiles
 from the same run. Results with successful samples are written before enforcing
 the existing error-rate and stub p99 gates; no successful samples still exits 2.

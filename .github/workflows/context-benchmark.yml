@@ -46,7 +46,7 @@ jobs:
           PYTHONPATH=packages/proto/gen/python:services/context \
             services/context/.venv/bin/python benchmarks/context/assemble_load.py \
             --profile stub --rps 500 --duration 10 \
-            --json web/public/benchmarks/context-assembly-benchmark-data.json
+            --json site/public/benchmarks/context-assembly-benchmark-data.json
 
       - name: Validate published context-assembly data
         run: |
@@ -55,13 +55,13 @@ jobs:
             --require-hashes \
             -r .github/requirements/jsonschema.txt
           python benchmarks/scripts/validate_published_context_assembly.py --strict \
-            web/public/benchmarks/context-assembly-benchmark-data.json
+            site/public/benchmarks/context-assembly-benchmark-data.json
 
       - name: Upload context-assembly published data
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: context-assembly-benchmark-data
-          path: web/public/benchmarks/context-assembly-benchmark-data.json
+          path: site/public/benchmarks/context-assembly-benchmark-data.json
           retention-days: 14
           if-no-files-found: error
