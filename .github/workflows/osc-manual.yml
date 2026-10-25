@@ -104,8 +104,21 @@ jobs:
         if: ${{ hashFiles('site/package.json') != '' }}
         run: pnpm --filter site build
 
-      - name: Site e2e tests
+      - name: Site lint
+        if: ${{ hashFiles('site/package.json') != '' }}
+        run: pnpm --filter site lint
+
+      - name: Site claims, links, and redirects
         if: ${{ hashFiles('site/package.json') != '' }}
         run: |
+          pnpm --filter site check:claims
+          pnpm --filter site check:links
+          pnpm --filter site check:redirects
+
+      - name: Site e2e tests
+        if: ${{ hashFiles('site/package.json') != '' }}
+        timeout-minutes: 8
+        run: |
+          pnpm --filter site test:unit
           pnpm --filter site exec playwright install --with-deps chromium # NOSONAR
           pnpm --filter site test:e2e
