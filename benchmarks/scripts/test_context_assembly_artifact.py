@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import subprocess  # nosec B404 - validator subprocess below uses a static argv
 import sys
+import unittest
 from pathlib import Path
 
 import jsonschema
@@ -30,6 +31,13 @@ EXPECTED = {
 }
 
 
+# Codacy excludes the repo's pytest-assert test trees (.codacy.yml), but
+# benchmarks/scripts is outside them; the sibling gate tests there assert
+# through unittest.TestCase methods. Assertion methods still raise plain
+# AssertionError, so pytest keeps collecting these functions unchanged.
+_CASES = unittest.TestCase()
+
+
 def _run_harness(monkeypatch, stats, *, profile="stub", max_error_rate=0.0) -> int:
     async def synthetic_run(*_args):
         return stats
@@ -47,7 +55,7 @@ def _run_harness(monkeypatch, stats, *, profile="stub", max_error_rate=0.0) -> i
 
 
 def _validate_cli() -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    return subprocess.run(  # nosec B603 - static argv, no shell  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         [sys.executable, str(SCRIPTS / "validate_published_context_assembly.py"),
          "--strict", DATA_NAME],
         capture_output=True,
@@ -59,12 +67,12 @@ def _validate_cli() -> subprocess.CompletedProcess[str]:
 def test_harness_serializes_and_validates_stub_result(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     stats = load._DriveStats((1.0, 2.0, 3.0, 4.0), 5, 4, 1)
-    assert _run_harness(monkeypatch, stats, max_error_rate=0.2) == 0
+    _CASES.assertEqual(_run_harness(monkeypatch, stats, max_error_rate=0.2), 0)
     payload = json.loads(Path(DATA_NAME).read_text(encoding="utf-8"))
-    assert payload == EXPECTED
+    _CASES.assertEqual(payload, EXPECTED)
     jsonschema.validate(payload, json.loads(SCHEMA.read_text(encoding="utf-8")))
     result = _validate_cli()
-    assert result.returncode == 0, result.stderr
+    _CASES.assertEqual(result.returncode, 0, result.stderr)
 
 
 @pytest.mark.parametrize("case", [
@@ -82,9 +90,12 @@ def test_harness_gate_exit_codes(tmp_path, monkeypatch, case):
     monkeypatch.chdir(tmp_path)
     succeeded = attempted - failed
     stats = load._DriveStats((latency,) * succeeded, attempted, succeeded, failed)
-    assert _run_harness(
-        monkeypatch, stats, profile=profile, max_error_rate=max_error_rate,
-    ) == expected
+    _CASES.assertEqual(
+        _run_harness(
+            monkeypatch, stats, profile=profile, max_error_rate=max_error_rate,
+        ),
+        expected,
+    )
 
 
 @pytest.mark.parametrize("field", EXPECTED)
@@ -118,15 +129,15 @@ def test_validator_cli_rejects_malformed_artifact(tmp_path, monkeypatch, payload
     monkeypatch.chdir(tmp_path)
     Path(DATA_NAME).write_text(json.dumps(payload), encoding="utf-8")
     result = _validate_cli()
-    assert result.returncode != 0
-    assert "ValidationError" in result.stderr
+    _CASES.assertNotEqual(result.returncode, 0)
+    _CASES.assertIn("ValidationError", result.stderr)
 
 
 def test_validator_cli_rejects_missing_artifact(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = _validate_cli()
-    assert result.returncode != 0
-    assert "file not found" in result.stderr
+    _CASES.assertNotEqual(result.returncode, 0)
+    _CASES.assertIn("file not found", result.stderr)
 
 
 def test_strict_validator_requires_jsonschema(tmp_path, monkeypatch):
@@ -139,4 +150,4 @@ def test_strict_validator_requires_jsonschema(tmp_path, monkeypatch):
     monkeypatch.setattr(validator.published_suite_validate, "jsonschema", None)
     with pytest.raises(SystemExit) as exc:
         validator.main(["--strict", DATA_NAME])
-    assert exc.value.code != 0
+    _CASES.assertNotEqual(exc.value.code, 0)
