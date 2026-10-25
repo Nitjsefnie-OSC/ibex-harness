@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { findWithheldSuiteLeaks, leakLines, withheldSuites } from './benchmark-boundary.mjs'
 
@@ -31,5 +34,32 @@ describe('leakLines', () => {
 describe('withheld-suite boundary', () => {
   it('renders no withheld-suite link on any rendered surface', async () => {
     assert.deepEqual(await findWithheldSuiteLeaks(), [])
+  })
+
+  it('reports a content link to the withheld route as <file>:<line>', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'withheld-boundary-'))
+    try {
+      await mkdir(join(root, 'app'), { recursive: true })
+      await writeFile(join(root, 'nuxt.config.ts'), 'export default {}\n')
+      await mkdir(join(root, 'content/docs'), { recursive: true })
+      await writeFile(join(root, 'content/docs/x.md'), [
+        `inline: [docs](/benchmarks/${slug})`,
+        `reference: [ref]: /benchmarks/${slug}`,
+        `html: <a href="/benchmarks/${slug}">read</a>`,
+        `absolute: https://ibexharness.com/benchmarks/${slug}#x`,
+        `prose about context assembly`,
+        `adr: 0038-context-assembly-service.md`,
+        `blog: /blog/context-assembly-budget`,
+        `data: /benchmarks/${artifact}`,
+      ].join('\n'))
+      assert.deepEqual(await findWithheldSuiteLeaks(root), [
+        'content/docs/x.md:1',
+        'content/docs/x.md:2',
+        'content/docs/x.md:3',
+        'content/docs/x.md:4',
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

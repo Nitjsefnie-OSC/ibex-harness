@@ -28,14 +28,30 @@ export function leakLines(slug, artifact, source) {
 }
 
 /**
+ * Line numbers (1-based) of the markdown lines whose link destination is the
+ * withheld route itself: `/benchmarks/<slug>` with no `[\w-]` character
+ * immediately after, so the artifact filename and sibling slugs (blog posts,
+ * ADR files) never match. Inline links, reference-style definitions,
+ * MDC/HTML `href` and absolute site URLs all carry the route verbatim, so
+ * one pattern covers them.
+ */
+function contentLeakLines(slug, source) {
+  const route = new RegExp(`/benchmarks/${slug}(?![\\w-])`)
+  return source
+    .split(/\r?\n/)
+    .flatMap((line, index) => route.test(line) ? [index + 1] : [])
+}
+
+/**
  * Leak lines across every rendered surface: the app sources (.vue/.ts under
  * site/app — landing page, components, nav, data) plus nuxt.config.ts, whose
- * `sitemap.urls` is the sitemap surface. site/e2e is browser-test code, not a
- * rendered surface, and site/content is Docus-authored docs, so neither is scanned.
+ * `sitemap.urls` is the sitemap surface, and the markdown under site/content,
+ * whose docs and blog pages are prerendered output. site/e2e is browser-test
+ * code, not a rendered surface, so it is not scanned.
  */
-export async function findWithheldSuiteLeaks() {
+export async function findWithheldSuiteLeaks(siteRoot = site) {
   const leaks = []
-  const surfaces = [join(site, 'app'), join(site, 'nuxt.config.ts')]
+  const surfaces = [join(siteRoot, 'app'), join(siteRoot, 'nuxt.config.ts')]
 
   async function walk(entry) {
     const info = await stat(entry)
@@ -52,8 +68,18 @@ export async function findWithheldSuiteLeaks() {
       const source = await readFile(file, 'utf8')
       for (const { slug, artifact } of withheldSuites) {
         for (const line of leakLines(slug, artifact, source)) {
-          leaks.push(`${relative(site, file)}:${line}`)
+          leaks.push(`${relative(siteRoot, file)}:${line}`)
         }
+      }
+    }
+  }
+
+  for (const file of await walk(join(siteRoot, 'content'))) {
+    if (!/\.md$/.test(file)) continue
+    const source = await readFile(file, 'utf8')
+    for (const { slug } of withheldSuites) {
+      for (const line of contentLeakLines(slug, source)) {
+        leaks.push(`${relative(siteRoot, file)}:${line}`)
       }
     }
   }
