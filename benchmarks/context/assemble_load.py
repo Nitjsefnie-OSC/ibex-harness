@@ -256,11 +256,31 @@ def _raise_error_rate_range(raw: str) -> None:
     )
 
 
+def _parse_rps(raw: str) -> int:
+    """Argparse type for ``--rps``: an integer >= 1."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"rps must be an integer, got {raw!r}"
+        ) from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"rps must be an integer >= 1, got {raw!r}"
+        )
+    return value
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("stub", "live"), default="stub")
     parser.add_argument("--addr", default="127.0.0.1:9092")
-    parser.add_argument("--rps", type=int, default=500)
+    parser.add_argument(
+        "--rps",
+        type=_parse_rps,
+        default=500,
+        help="Requests per second (default 500; minimum 1).",
+    )
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--json", type=Path, help="Write the profile-tagged result to this path.")
     parser.add_argument(

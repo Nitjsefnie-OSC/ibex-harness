@@ -11,6 +11,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from jsonschema import Draft202012Validator
 
 from benchmark_test_support import ROOT, SCRIPTS, load_module
 
@@ -43,14 +44,14 @@ EXPECTED = {
 _CASES = unittest.TestCase()
 
 
-def _run_harness(monkeypatch, stats, *, profile="stub", max_error_rate=0.0) -> int:
+def _run_harness(monkeypatch, stats, *, profile="stub", rps="500", max_error_rate=0.0) -> int:
     async def synthetic_run(*_args):
         return stats
 
     monkeypatch.setattr(load, "_run_stub", synthetic_run)
     monkeypatch.setattr(load, "_run_live", synthetic_run)
     monkeypatch.setattr(sys, "argv", [
-        "assemble_load.py", "--profile", profile, "--rps", "500", "--duration", "10",
+        "assemble_load.py", "--profile", profile, "--rps", str(rps), "--duration", "10",
         "--max-error-rate", str(max_error_rate), "--json", DATA_NAME,
     ])
     try:
@@ -109,6 +110,29 @@ def test_harness_gate_exit_codes(tmp_path, monkeypatch, case):
         ),
         expected,
     )
+
+
+@pytest.mark.parametrize("rps", [-1, 0, 1, 2])
+def test_harness_rps_artifact_schema_invariant(tmp_path, monkeypatch, rps):
+    monkeypatch.chdir(tmp_path)
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    minimum = schema["properties"]["rps"]["minimum"]
+    stats = load._DriveStats((1.0,), 1, 1, 0)
+    code = _run_harness(monkeypatch, stats, rps=str(rps))
+    if rps < minimum:
+        _CASES.assertNotEqual(code, 0)
+        _CASES.assertFalse(
+            Path(DATA_NAME).exists(),
+            f"rps={rps}: harness exited {code} but wrote {DATA_NAME}",
+        )
+    else:
+        _CASES.assertEqual(code, 0)
+        payload = json.loads(Path(DATA_NAME).read_text(encoding="utf-8"))
+        _CASES.assertEqual(
+            list(Draft202012Validator(schema).iter_errors(payload)),
+            [],
+            f"rps={rps}: harness wrote an artifact the schema rejects",
+        )
 
 
 @pytest.mark.parametrize("field", EXPECTED)
