@@ -1,0 +1,164 @@
+name: OSC context-benchmark path probe
+
+# Fork-only dispatch probe: the scheduled context-benchmark gate workflow can
+# never run on a branch (GitHub dispatches only workflows present on the
+# default branch), so this probe validates an arbitrary ref by parsing the
+# gate workflow at that ref at run time and running its gate job's own run:
+# steps and asserting its artifact and validator outcomes.
+# Not part of upstream CI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: branch/tag/SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: osc-adv-context-benchmark-${{ inputs.target_ref }}
+  cancel-in-progress: true
+
+jobs:
+  osc-adv-validate:
+    name: osc-adv-validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Provenance
+        run: |
+          set -euo pipefail
+          echo "tested_target_ref=${{ inputs.target_ref }}"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ ! "$checked_out_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::git rev-parse HEAD did not produce a 40-character commit SHA: $checked_out_sha"
+            exit 1
+          fi
+          printf 'checked-out SHA: %s\n' "$checked_out_sha"
+
+      - name: Gate workflow guard
+        run: |
+          if [ ! -f .github/workflows/context-benchmark.yml ]; then
+            echo "SKIP loud: target_ref has no .github/workflows/context-benchmark.yml"
+            exit 0
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Parse and run the gate job at the target ref
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --disable-pip-version-check --no-cache-dir pyyaml
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          GATE = Path(".github/workflows/context-benchmark.yml")
+          NEEDLE = "validate_published_context_assembly.py"
+          ARTIFACT_MARK = "benchmarks/context-assembly"
+
+          doc = yaml.safe_load(GATE.read_text()) or {}
+          jobs = doc.get("jobs") or {}
+
+          def run_texts(steps):
+              return [s["run"] for s in steps or []
+                      if isinstance(s, dict) and isinstance(s.get("run"), str)]
+
+          def artifact_paths(steps):
+              return [(s.get("with") or {}).get("path") or ""
+                      for s in steps or []
+                      if isinstance(s, dict)
+                      and str(s.get("uses") or "").startswith("actions/upload-artifact@")]
+
+          matches = []
+          for job_id, job in jobs.items():
+              steps = (job or {}).get("steps") or []
+              texts = run_texts(steps)
+              if not any(NEEDLE in t for t in texts):
+                  continue
+              blob = "\n".join(texts + artifact_paths(steps))
+              if ARTIFACT_MARK in blob:
+                  matches.append((job_id, steps))
+
+          if not matches:
+              sys.exit("::error::no job in " + str(GATE) + " runs the validator against a "
+                       + ARTIFACT_MARK + " artifact")
+
+          if len(matches) > 1:
+              sys.exit("::error::ambiguous gate jobs: " + ", ".join(m[0] for m in matches))
+
+          job_id, steps = matches[0]
+          paths = [p for p in artifact_paths(steps) if p]
+          if not paths:
+              sys.exit("::error::job " + job_id + ": no upload-artifact path found")
+
+          runs = run_texts(steps)
+          all_text = "\n".join(runs)
+          m = re.search(r"--json[= \t]+(\S+)", all_text)
+          json_path = m.group(1) if m else "(not found)"
+
+          def logical_lines(text):
+              out, buf = [], ""
+              for raw in text.splitlines():
+                  line = raw.strip()
+                  if buf:
+                      line = buf + " " + line
+                      buf = ""
+                  if line.endswith("\\"):
+                      buf = line[:-1].rstrip()
+                  else:
+                      out.append(line)
+              if buf:
+                  out.append(buf)
+              return out
+
+          validator_line = next((ln for t in runs
+                                 for ln in logical_lines(t) if NEEDLE in ln), None)
+          if validator_line is None:
+              sys.exit("::error::job " + job_id + ": validator invocation line not found")
+
+          print("gate job id: " + job_id
+                + "\n--json path: " + json_path
+                + "\nupload-artifact path: " + "\n  ".join(paths)
+                + "\nvalidator invocation: " + validator_line)
+
+          # Provide the gate job's uses: setup by running its run: steps in order
+          # under bash -e (the runner's default shell behaviour for run steps).
+          for i, text in enumerate(runs):
+              proc = subprocess.run(["bash", "-e", "-c", text])
+              if proc.returncode != 0:
+                  sys.exit("::error::job " + job_id + " run step " + str(i + 1)
+                           + " exited " + str(proc.returncode))
+
+          # ASSERTION 1: every file the job uploads exists on disk.
+          missing = [p for path in paths for p in path.splitlines()
+                     if p.strip() and not Path(p.strip()).exists()]
+          if missing:
+              sys.exit("::error::artifact file(s) not on disk: " + ", ".join(missing))
+
+          # ASSERTION 2: the job's own validator invocation, verbatim, exits 0.
+          proc = subprocess.run(["bash", "-e", "-c", validator_line])
+          if proc.returncode != 0:
+              sys.exit("::error::validator invocation exited " + str(proc.returncode))
+
+          print("PROBE OK")
+          PY
