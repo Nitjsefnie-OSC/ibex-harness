@@ -10,8 +10,8 @@ Python async gRPC load script for `ContextAssemblyService.AssembleContext`.
 | Live 100K (`--profile live`) | RPC latency and request error rate against the configured context service with a seeded memory corpus | Exercises the live context and memory services; excludes the proxy HTTP path | Manual run, no CI gate; live results are outside the stub-only artifact schema |
 | Proxy overhead (`BenchmarkProxyChatOverheadWithAssemble`) | Warm chat-handler overhead with assembly enabled in [`chat_overhead_bench_test.go`](../../services/proxy/internal/http/chat_overhead_bench_test.go) | Warm auth/directive caches, Redis rate limiting, immediate mock provider, and an always-successful fake assembler; excludes real context RPCs and corpus retrieval | Collected under the `proxy` suite; no dedicated context-assembly p99 gate |
 
-Exit-audit criterion 4 remains **Partial**. The [index criterion](../../web/content/roadmap/phase-3-5-extraction-assembly/index.mdx#L101)
-and [goals target](../../web/content/roadmap/phase-3-5-extraction-assembly/goals.mdx#L70)
+Exit-audit criterion 4 remains **Partial**. The [index criterion](../../engineering/roadmap-archive/legacy-roadmap/phase-3-5-extraction-assembly/index.mdx#L101)
+and [goals target](../../engineering/roadmap-archive/legacy-roadmap/phase-3-5-extraction-assembly/goals.mdx#L70)
 specify different load conditions. This table selects neither numeric contract.
 
 The `contextAssembly` registry entry and data contract exist. Its reserved
