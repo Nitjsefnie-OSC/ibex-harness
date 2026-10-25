@@ -8,6 +8,9 @@ import { waitHydrated } from './helpers'
 // left in the "Rendering diagram" placeholder with no console error.
 const pageWithDiagrams = '/docs/proxy/request-routing'
 
+// The fixture page ships exactly two mermaid figures.
+const expectedDiagramCount = 2
+
 test.describe('docs page mermaid diagrams', () => {
   // The per-figure settled-state expectations below use their own 30s
   // windows; keep the test-level clock above them so a hang surfaces as
@@ -19,7 +22,7 @@ test.describe('docs page mermaid diagrams', () => {
     await waitHydrated(page)
 
     const figures = page.locator('figure.mermaid-figure')
-    await expect(figures).toHaveCount(2)
+    await expect(figures).toHaveCount(expectedDiagramCount)
 
     for (const figure of await figures.all()) {
       await figure.scrollIntoViewIfNeeded()
@@ -38,7 +41,7 @@ test.describe('docs page mermaid diagrams', () => {
     await waitHydrated(page)
 
     const figures = page.locator('figure.mermaid-figure')
-    await expect(figures).toHaveCount(2)
+    await expect(figures).toHaveCount(expectedDiagramCount)
 
     for (const figure of await figures.all()) {
       await figure.scrollIntoViewIfNeeded()
@@ -52,18 +55,28 @@ test.describe('docs page mermaid diagrams', () => {
     // forever with no console error — exactly the indefinite-spinner
     // failure mode this suite exists to prevent.
     const mermaidChunkSignature = 'registerIconPacks'
+    let heldMermaidChunkRequests = 0
     await page.route('**/_nuxt/*.js', async (route) => {
       const response = await route.fetch()
       const body = await response.text()
-      if (body.includes(mermaidChunkSignature)) return // hold the route open
+      if (body.includes(mermaidChunkSignature)) {
+        heldMermaidChunkRequests += 1
+        return // hold the route open
+      }
       await route.fulfill({ response })
     })
 
     await page.goto(pageWithDiagrams)
     await waitHydrated(page)
 
+    // The stall must have engaged. If the signature ever stops matching
+    // the library chunk (a mermaid upgrade renaming its API), nothing is
+    // held, the page renders normally, and this discriminator fails the
+    // test instead of letting it pass vacuously.
+    await expect.poll(() => heldMermaidChunkRequests, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
+
     const figures = page.locator('figure.mermaid-figure')
-    await expect(figures).toHaveCount(2)
+    await expect(figures).toHaveCount(expectedDiagramCount)
 
     for (const figure of await figures.all()) {
       await figure.scrollIntoViewIfNeeded()
