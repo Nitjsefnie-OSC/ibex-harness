@@ -44,15 +44,18 @@ EXPECTED = {
 _CASES = unittest.TestCase()
 
 
-def _run_harness(monkeypatch, stats, *, profile="stub", rps="500", max_error_rate=0.0) -> int:
+def _run_harness(monkeypatch, stats, options) -> int:
+    options = {"profile": "stub", "rps": "500", "max_error_rate": 0.0, **options}
+
     async def synthetic_run(*_args):
         return stats
 
     monkeypatch.setattr(load, "_run_stub", synthetic_run)
     monkeypatch.setattr(load, "_run_live", synthetic_run)
     monkeypatch.setattr(sys, "argv", [
-        "assemble_load.py", "--profile", profile, "--rps", str(rps), "--duration", "10",
-        "--max-error-rate", str(max_error_rate), "--json", DATA_NAME,
+        "assemble_load.py", "--profile", options["profile"], "--rps", str(options["rps"]),
+        "--duration", "10",
+        "--max-error-rate", str(options["max_error_rate"]), "--json", DATA_NAME,
     ])
     try:
         return load.main()
@@ -81,7 +84,7 @@ def _run_validator(monkeypatch) -> tuple[int, str]:
 def test_harness_serializes_and_validates_stub_result(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     stats = load._DriveStats((1.0, 2.0, 3.0, 4.0), 5, 4, 1)
-    _CASES.assertEqual(_run_harness(monkeypatch, stats, max_error_rate=0.2), 0)
+    _CASES.assertEqual(_run_harness(monkeypatch, stats, {"max_error_rate": 0.2}), 0)
     payload = json.loads(Path(DATA_NAME).read_text(encoding="utf-8"))
     _CASES.assertEqual(payload, EXPECTED)
     jsonschema.validate(payload, json.loads(SCHEMA.read_text(encoding="utf-8")))
@@ -106,7 +109,8 @@ def test_harness_gate_exit_codes(tmp_path, monkeypatch, case):
     stats = load._DriveStats((latency,) * succeeded, attempted, succeeded, failed)
     _CASES.assertEqual(
         _run_harness(
-            monkeypatch, stats, profile=profile, max_error_rate=max_error_rate,
+            monkeypatch, stats,
+            {"profile": profile, "max_error_rate": max_error_rate},
         ),
         expected,
     )
@@ -118,7 +122,7 @@ def test_harness_rps_artifact_schema_invariant(tmp_path, monkeypatch, rps):
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     minimum = schema["properties"]["rps"]["minimum"]
     stats = load._DriveStats((1.0,), 1, 1, 0)
-    code = _run_harness(monkeypatch, stats, rps=str(rps))
+    code = _run_harness(monkeypatch, stats, {"rps": str(rps)})
     if rps < minimum:
         _CASES.assertNotEqual(code, 0)
         _CASES.assertFalse(
