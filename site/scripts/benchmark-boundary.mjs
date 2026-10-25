@@ -50,9 +50,7 @@ async function walk(entry) {
   const info = await stat(entry)
   if (!info.isDirectory()) return [entry]
   const entries = await readdir(entry)
-  const files = []
-  for (const name of entries) files.push(...await walk(join(entry, name)))
-  return files
+  return (await Promise.all(entries.map((name) => walk(join(entry, name))))).flat()
 }
 
 /**
