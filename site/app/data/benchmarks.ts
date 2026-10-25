@@ -47,7 +47,19 @@ export const benchmarkMeta = {
     file: 'extraction-quality-benchmark-data.json',
     description: 'Cassette-mode extraction quality against the v1 gold set.',
   },
+  contextAssembly: {
+    title: 'Context assembly',
+    file: 'context-assembly-benchmark-data.json',
+    description: 'Stub-profile AssembleContext RPC latency and error rate under load. Excludes the live memory service, corpus retrieval, and the proxy HTTP path.',
+  },
 } as const
+
+/**
+ * Context's route is not implemented; its registry entry and data contract are live.
+ */
+export function hasPublishedBenchmarkPages(suite: keyof typeof benchmarkMeta): boolean {
+  return suite !== 'contextAssembly'
+}
 
 export function formatNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
